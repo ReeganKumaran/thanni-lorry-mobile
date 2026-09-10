@@ -236,7 +236,7 @@ export function JourneyScreen({ monitor }: Props) {
           holdingLabel="Keep holding"
           busy={respondingToCheck}
           onActivate={() => respond("HELP")}
-          accessibilityHint="Press and hold for five seconds to notify your trusted contact. An alarm sounds from three seconds."
+          accessibilityHint="Notifies your trusted contact."
         />
       </View>
 

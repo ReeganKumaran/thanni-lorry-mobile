@@ -30,15 +30,39 @@ type Props = {
   style?: StyleProp<ViewStyle>;
 };
 
-/** Five seconds, escalating each one. Only the last second calls for help. */
-const HOLD_SECONDS = 5;
+/** How long the SOS must be held. Everything below is derived from it. */
+const HOLD_SECONDS = 10;
 const HOLD_MS = HOLD_SECONDS * 1000;
 
-/** Gap between the four beats of second two. */
+/**
+ * The escalation is expressed as fractions of the hold, never as absolute
+ * seconds.
+ *
+ * The ladder used to be hardcoded at 1s, 2s, 3s, 4s against a 5s hold. Raising
+ * the hold to 10s under those numbers would have left everything after the
+ * fourth second silent — six seconds of nothing on an emergency control, which
+ * to someone who cannot see the screen is indistinguishable from a control that
+ * has stopped working. Scaling the phases means the hold length can change
+ * again without ever opening that gap.
+ */
+const FLURRY_FROM = 0.4;
+const CONTINUOUS_FROM = 0.6;
+
+/** Gap between the beats of the flurry phase. */
 const BEAT_GAP_MS = 110;
 
-/** Repeating buzz from second three: [wait, vibrate, pause]. */
+/** Repeating buzz once the hold turns continuous: [wait, vibrate, pause]. */
 const CONTINUOUS_PATTERN = [0, 500, 120];
+
+/** True once the hold has escalated to the continuous, audible phase. */
+function isContinuous(elapsedSeconds: number): boolean {
+  return elapsedSeconds / HOLD_SECONDS >= CONTINUOUS_FROM;
+}
+
+/** Spoken and screen-reader description, built from the real timings. */
+export const HOLD_TIMING_HINT =
+  `Press and hold for ${HOLD_SECONDS} seconds. ` +
+  `An alarm sounds from ${Math.round(CONTINUOUS_FROM * HOLD_SECONDS)} seconds.`;
 
 /**
  * An action that has to be meant, and that announces itself as it builds.
@@ -47,14 +71,12 @@ const CONTINUOUS_PATTERN = [0, 500, 120];
  * quiet undo. The hold escalates so the traveller knows exactly how far along
  * it is without looking:
  *
- *   1s  one beat            — you are holding something
- *   2s  four rapid beats    — this is going somewhere
- *   3s  continuous + alarm  — audible to anyone nearby
- *   4s  continuous + alarm
- *   5s  emergency raised
+ *   every second        a beat, so there is never silence while holding
+ *   from 40%           the beat becomes a flurry — this is going somewhere
+ *   from 60%           continuous buzz and an alarm, audible to anyone nearby
+ *   at 100%            emergency raised
  *
- * Releasing at any point before five seconds stops everything and calls for
- * nothing.
+ * Releasing at any point before the end stops everything and calls for nothing.
  */
 export function HoldButton({
   label,
@@ -116,35 +138,39 @@ export function HoldButton({
       useNativeDriver: false,
     }).start();
 
-    // Second 1 — a single beat.
-    at(1000, () => {
-      setElapsed(1);
-      holdTickFeedback();
-      Vibration.vibrate(45);
-    });
+    // One beat on every second of the hold, whatever the hold length. The
+    // countdown on the button counts down in step with it.
+    for (let second = 1; second < HOLD_SECONDS; second += 1) {
+      at(second * 1000, () => {
+        setElapsed(second);
+        const progressed = second / HOLD_SECONDS;
 
-    // Second 2 — four in quick succession.
-    at(2000, () => {
-      setElapsed(2);
-      for (let i = 0; i < 4; i += 1) {
-        at(i * BEAT_GAP_MS, () => {
+        // Once the continuous buzz is running it is the feedback; adding
+        // discrete taps on top of it just muddies what stage you are at.
+        if (progressed >= CONTINUOUS_FROM) return;
+
+        if (progressed >= FLURRY_FROM) {
+          for (let i = 0; i < 4; i += 1) {
+            at(i * BEAT_GAP_MS, () => {
+              holdTickFeedback();
+              Vibration.vibrate(35);
+            });
+          }
+        } else {
           holdTickFeedback();
-          Vibration.vibrate(35);
-        });
-      }
-    });
+          Vibration.vibrate(45);
+        }
+      });
+    }
 
-    // Second 3 — continuous, and now audible.
-    at(3000, () => {
-      setElapsed(3);
+    // Continuous, and now audible to anyone nearby.
+    at(Math.round(CONTINUOUS_FROM * HOLD_MS), () => {
       stopSpeaking();
       Vibration.vibrate(CONTINUOUS_PATTERN, true);
       void startAlarm();
     });
 
-    at(4000, () => setElapsed(4));
-
-    // Second 5 — only now is it an emergency.
+    // Only now is it an emergency.
     at(HOLD_MS, () => {
       clearAll();
       setHolding(false);
@@ -175,8 +201,10 @@ export function HoldButton({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      // The caller supplies the consequence; the timings come from here, so
+      // the numbers a screen reader announces cannot drift from the ladder.
       accessibilityHint={
-        accessibilityHint ?? `Press and hold for ${HOLD_SECONDS} seconds.`
+        accessibilityHint ? `${accessibilityHint} ${HOLD_TIMING_HINT}` : HOLD_TIMING_HINT
       }
       accessibilityState={{ disabled: inactive, busy }}
       disabled={inactive}
@@ -184,7 +212,7 @@ export function HoldButton({
       onPressOut={cancel}
       style={[
         styles.base,
-        holding && elapsed >= 3 && styles.alarming,
+        holding && isContinuous(elapsed) && styles.alarming,
         inactive && styles.inactive,
         style,
       ]}
