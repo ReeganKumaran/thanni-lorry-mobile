@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "AURA",
+    "slug": "aura-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "aura",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#F7F7F5"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.aura.companion",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "AURA uses your location to keep your journey on route and to alert your trusted contact if something goes wrong.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "AURA keeps monitoring your journey in the background so a deviation or a long stop is noticed even when the screen is off.",
+        "NSCameraUsageDescription": "AURA uses the camera to describe obstacles and signage ahead of you.",
+        "NSMicrophoneUsageDescription": "AURA lets you answer a safety check by voice.",
+        "UIBackgroundModes": ["location"]
+      }
+    },
+    "android": {
+      "package": "com.aura.companion",
+      "adaptiveIcon": {
+        "backgroundColor": "#F7F7F5"
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "CAMERA",
+        "VIBRATE"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "AURA uses your location to keep your journey on route.",
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "AURA uses the camera to describe obstacles and signage ahead of you."
+        }
+      ]
+    ],
+    "extra": {
+      "auraApiUrl": null
+    }
+  }
+}
