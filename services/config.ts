@@ -16,7 +16,15 @@ import Constants from "expo-constants";
 export const API_PORT = 8000;
 export const API_PREFIX = "/api/v1";
 
+/**
+ * The edge CV node (services/edge) runs beside the API on the same machine.
+ * Over USB both are reached through `adb reverse`, so the phone talks to
+ * localhost for each and never needs a LAN address.
+ */
+export const EDGE_PORT = 8001;
+
 let overrideBaseUrl: string | null = null;
+let overrideEdgeUrl: string | null = null;
 
 /**
  * Anything reaching us from the Expo config or process.env is unvalidated at
@@ -44,12 +52,12 @@ function expoHostUri(): string | null {
   return asHostString(config?.hostUri) ?? asHostString(legacy?.debuggerHost);
 }
 
-function fromExpoHost(): string | null {
+function fromExpoHost(port: number): string | null {
   const hostUri = expoHostUri();
   if (!hostUri) return null;
   const host = hostUri.split(":")[0];
   if (!host) return null;
-  return `http://${host}:${API_PORT}`;
+  return `http://${host}:${port}`;
 }
 
 function fromEnv(): string | null {
@@ -59,9 +67,37 @@ function fromEnv(): string | null {
   return raw ? normalize(raw) : null;
 }
 
+function edgeFromEnv(): string | null {
+  const extra = Constants.expoConfig?.extra as Record<string, unknown> | undefined;
+  const raw =
+    asHostString(process.env.EXPO_PUBLIC_AURA_EDGE_URL) ?? asHostString(extra?.auraEdgeUrl);
+  return raw ? normalize(raw) : null;
+}
+
+/** Swap the port on an already-resolved origin, keeping scheme and host. */
+function withPort(origin: string, port: number): string {
+  return origin.replace(/^(https?:\/\/[^/:]+)(?::\d+)?$/i, `$1:${port}`);
+}
+
 /** Root of the backend, without the /api/v1 prefix. */
 export function getApiOrigin(): string {
-  return overrideBaseUrl ?? fromEnv() ?? fromExpoHost() ?? `http://localhost:${API_PORT}`;
+  return overrideBaseUrl ?? fromEnv() ?? fromExpoHost(API_PORT) ?? `http://localhost:${API_PORT}`;
+}
+
+/**
+ * Root of the edge CV node.
+ *
+ * A host typed into "Change" on the home screen is about *this laptop*, not
+ * about one service on it, so the edge follows it on its own port unless the
+ * edge has been pinned separately. Otherwise the resolution order matches the
+ * API's.
+ */
+export function getEdgeOrigin(): string {
+  if (overrideEdgeUrl) return overrideEdgeUrl;
+  const explicit = edgeFromEnv();
+  if (explicit) return explicit;
+  if (overrideBaseUrl) return withPort(overrideBaseUrl, EDGE_PORT);
+  return fromExpoHost(EDGE_PORT) ?? `http://localhost:${EDGE_PORT}`;
 }
 
 /** Base URL including the versioned prefix. */
@@ -93,4 +129,20 @@ export function setApiOrigin(value: string | null): string {
 /** True when the user has pinned a host by hand. */
 export function hasApiOriginOverride(): boolean {
   return overrideBaseUrl !== null;
+}
+
+/** Point the app at a different edge node. Pass null to fall back to automatic. */
+export function setEdgeOrigin(value: string | null): string {
+  const host = asHostString(value);
+  if (host === null) {
+    overrideEdgeUrl = null;
+    return getEdgeOrigin();
+  }
+
+  let candidate = normalize(host);
+  if (!/:\d+$/.test(candidate.replace(/^https?:\/\//i, ""))) {
+    candidate = `${candidate}:${EDGE_PORT}`;
+  }
+  overrideEdgeUrl = candidate;
+  return overrideEdgeUrl;
 }

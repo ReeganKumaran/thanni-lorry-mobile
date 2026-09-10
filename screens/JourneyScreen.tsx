@@ -3,6 +3,7 @@ import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from "react
 
 import { ConnectionBadge } from "../components/ConnectionBadge";
 import { HoldButton } from "../components/HoldButton";
+import { JourneyCamera } from "../components/JourneyCamera";
 import {
   PANIC_GESTURE_HINT,
   isPanicGestureSupported,
@@ -24,6 +25,7 @@ import {
   touchTarget,
 } from "../constants/theme";
 import type { JourneyMonitor } from "../hooks/useJourneyMonitor";
+import { useCameraPerception } from "../hooks/useCameraPerception";
 import { useVoiceControl } from "../hooks/useVoiceControl";
 
 type Props = {
@@ -101,6 +103,18 @@ export function JourneyScreen({ monitor }: Props) {
     describeLocation,
   });
 
+  // The camera is the last leg of the perception chain: frames go to the edge
+  // node, the node's events reach the console over SSE, and what it finds on
+  // the ground is spoken here. Speed and safety state are passed through as
+  // readings — the node decides the sampling rate and what the hazard is.
+  const perception = useCameraPerception({
+    journeyId: journey?.id ?? null,
+    speedMps: lastReading?.speed_mps ?? 0,
+    safetyState,
+    // A full-screen safety check is not the moment to be told about pavement.
+    enabled: safetyState !== "CHECKING",
+  });
+
   const mapLatitude = lastReading?.latitude ?? journey?.origin.latitude ?? 13.0827;
   const mapLongitude = lastReading?.longitude ?? journey?.origin.longitude ?? 80.2707;
 
@@ -166,6 +180,8 @@ export function JourneyScreen({ monitor }: Props) {
         ) : null}
 
         <JourneyStats fix={fix} accuracyMeters={lastReading?.accuracy ?? null} />
+
+        <JourneyCamera perception={perception} />
 
         <Pressable
           accessibilityRole="button"
