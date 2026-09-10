@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AccessibilityInfo } from "react-native";
 
 import { DEFAULT_PLACE_SIZE, metersForSize } from "../types/api";
 import { directRoute, fetchWalkingRoute } from "../services/routing";
@@ -215,6 +216,11 @@ export function useJourneyMonitor(): JourneyMonitor {
     } else {
       speak(`${presentation.headline} ${presentation.detail}`, "navigation");
     }
+    // expo-speech is a separate pipeline from the screen reader — it can be
+    // muted on its own, and it reaches nobody on a braille display. A change
+    // of safety state is the one thing that must never be missed, so it goes
+    // out on both channels.
+    AccessibilityInfo.announceForAccessibility(presentation.headline);
 
     if (next !== "CHECKING") setPendingCheck(null);
   }, []);

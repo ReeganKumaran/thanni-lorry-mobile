@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState } from "react-native";
+import { AccessibilityInfo, AppState } from "react-native";
 import type { AppStateStatus } from "react-native";
 import type { CameraView } from "expo-camera";
 
@@ -220,7 +220,7 @@ export function useCameraPerception({
     })();
   }, []);
 
-  const announce = useCallback((hazards: EdgeHazard[]) => {
+  const announce = useCallback((hazards: EdgeHazard[], safetyState: string) => {
     // Worst first, decided by the node (services/edge/pipeline.py sorts on
     // severity, then proximity, then confidence). Taking the head means the
     // phone never ranks hazards itself, and says one thing rather than reading
@@ -229,6 +229,15 @@ export function useCameraPerception({
     if (!worst) return;
 
     lastHazardAtRef.current = Date.now();
+
+    // Only while the journey is calm. Once the FSM has left SAFE the traveller
+    // is in a conversation about their own safety — being asked "Are you
+    // safe?", or having just been told their contact is on the way and to stay
+    // put. Pavement is not what they need in that moment, and AURA_DESIGN.md
+    // section 32 is explicit that narration must not intrude on a safety
+    // event. Frames keep flowing, so the console and the backend still get the
+    // evidence; only the talking stops.
+    if (safetyState !== "SAFE") return;
 
     const sentence = worst.recommendation?.trim();
     // No sentence from the node means nothing safe to say. Silence beats
@@ -242,6 +251,10 @@ export function useCameraPerception({
 
     announcedRef.current.set(key, now);
     speak(sentence, "hazard");
+    // The app's own text-to-speech is a separate pipeline from the screen
+    // reader: it can be muted on its own, and it is no use at all to someone
+    // reading a braille display. Announce through both.
+    AccessibilityInfo.announceForAccessibility(sentence);
     setLastHazardSpoken(sentence);
   }, []);
 
@@ -302,12 +315,24 @@ export function useCameraPerception({
             setCadenceFps(result.cadence.target_fps);
             nextDelay = clampInterval(result.cadence.next_frame_after_ms);
           }
-          announce(result.hazards ?? []);
+          announce(result.hazards ?? [], safetyStateRef.current);
         }
       } catch (err) {
         if (!runningRef.current) return;
         nextDelay = EDGE_BACKOFF_MS;
-        setPhase("edge-unreachable");
+        setPhase((previous) => {
+          // Losing hazard coverage silently is the inverse of the failure this
+          // design guards against: someone who cannot see the screen would go
+          // on believing the path was being watched. Said once, on the way
+          // down, not on every retry — and low priority, so it can never cut
+          // across the safety conversation.
+          if (previous !== "edge-unreachable") {
+            const line = "Camera hazard alerts are unavailable right now.";
+            speak(line, "environment");
+            AccessibilityInfo.announceForAccessibility(line);
+          }
+          return "edge-unreachable";
+        });
         setError(
           err instanceof EdgeError
             ? err.message
