@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import { WebView } from "react-native-webview";
 
@@ -64,6 +64,11 @@ function buildHtml(lat: number, lng: number, radius: number): string {
     map.on('click', function (e) { move(e.latlng); });
     marker.on('dragend', function () { move(marker.getLatLng()); });
 
+    window.auraSetRadius = function (metres) {
+      ring.setRadius(metres);
+      map.fitBounds(ring.getBounds(), { padding: [24, 24], maxZoom: 17 });
+    };
+
     // Let React Native recentre the pin after a search.
     window.auraSetCenter = function (lat, lng) {
       var latlng = L.latLng(lat, lng);
@@ -89,13 +94,24 @@ export function OsmMap({ latitude, longitude, onPick, radiusMeters = 150 }: Prop
     [],
   );
 
-  const key = `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
-  if (key !== lastSentRef.current && webviewRef.current) {
+  // Recentring is a side effect, so it belongs in an effect: calling into the
+  // WebView during render fires on renders React may never commit, and runs
+  // twice under Strict Mode.
+  useEffect(() => {
+    const key = `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
+    if (key === lastSentRef.current) return;
     lastSentRef.current = key;
-    webviewRef.current.injectJavaScript(
+    webviewRef.current?.injectJavaScript(
       `window.auraSetCenter && window.auraSetCenter(${latitude}, ${longitude}); true;`,
     );
-  }
+  }, [latitude, longitude]);
+
+  // Resizing the ring reframes the map, so the whole circle stays visible.
+  useEffect(() => {
+    webviewRef.current?.injectJavaScript(
+      `window.auraSetRadius && window.auraSetRadius(${radiusMeters}); true;`,
+    );
+  }, [radiusMeters]);
 
   return (
     <View style={styles.container}>
@@ -106,6 +122,12 @@ export function OsmMap({ latitude, longitude, onPick, radiusMeters = 150 }: Prop
         style={styles.webview}
         javaScriptEnabled
         domStorageEnabled
+        // Leaflet's attribution is a real link. Letting the WebView follow it
+        // navigates the map away — mid-journey that replaces the live map with
+        // a web page. Only the inline document may load.
+        onShouldStartLoadWithRequest={(request) =>
+          request.url === "about:blank" || request.url.startsWith("data:")
+        }
         onMessage={(event) => {
           try {
             const { lat, lng } = JSON.parse(event.nativeEvent.data);
@@ -125,6 +147,9 @@ export function OsmMap({ latitude, longitude, onPick, radiusMeters = 150 }: Prop
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    // The picker gives the map the screen, so this is only a floor for small
+    // devices — high enough to be usable, low enough to leave the footer room.
+    minHeight: 200,
     borderRadius: 12,
     overflow: "hidden",
     borderWidth: 1,

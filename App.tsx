@@ -23,6 +23,10 @@ export default function App() {
           error={monitor.error}
           onStart={(destination) => void monitor.start(destination)}
           onDismissError={monitor.dismissError}
+          place={monitor.place}
+          savePlace={(label, coords, radiusMeters) =>
+            void monitor.savePlace(label, coords, radiusMeters)
+          }
         />
       )}
 

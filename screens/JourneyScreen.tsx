@@ -1,13 +1,23 @@
 import { useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { AccessibleButton } from "../components/AccessibleButton";
 import { ConnectionBadge } from "../components/ConnectionBadge";
+import { HoldButton } from "../components/HoldButton";
+import { JourneyMap } from "../components/JourneyMap";
+import { JourneyStats } from "../components/JourneyStats";
 import { PlacePanel } from "../components/PlacePanel";
 import { PlacePickerModal } from "../components/PlacePickerModal";
-import { SafetyStatusBanner } from "../components/SafetyStatusBanner";
 import { TelemetryPanel } from "../components/TelemetryPanel";
-import { colors, fontSize, space } from "../constants/theme";
+import { presentSafetyState } from "../constants/safety";
+import {
+  colors,
+  fontSize,
+  fontWeight,
+  radius,
+  space,
+  touchTarget,
+} from "../constants/theme";
 import type { JourneyMonitor } from "../hooks/useJourneyMonitor";
 
 type Props = {
@@ -15,8 +25,11 @@ type Props = {
 };
 
 /**
- * The active journey view. A map belongs here (AURA_DESIGN.md section 09); this
- * first version shows the same journey facts in text until the map layer lands.
+ * The active journey.
+ *
+ * AURA_DESIGN.md section 09: the map dominates while the journey is normal, and
+ * the detail below it stays short. Anything the traveller does not need at a
+ * glance sits behind "Details" rather than crowding the screen.
  */
 export function JourneyScreen({ monitor }: Props) {
   const {
@@ -24,6 +37,9 @@ export function JourneyScreen({ monitor }: Props) {
     safetyState,
     telemetry,
     lastReading,
+    trail,
+    plannedRoute,
+    fix,
     online,
     queuedReadings,
     respondingToCheck,
@@ -34,31 +50,111 @@ export function JourneyScreen({ monitor }: Props) {
     savePlace,
   } = monitor;
 
-  const destination = journey?.destination.name ?? null;
-
-  // Which place the OpenStreetMap picker is currently setting, if any.
   const [pickingLabel, setPickingLabel] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
 
-  // Open the map on the last GPS fix, or the journey origin before one arrives.
+  const destination = journey?.destination.name ?? null;
+  const presentation = presentSafetyState(safetyState);
+  const headline = place.paused ? `At ${place.current}` : presentation.headline;
+  const statusColor = place.paused ? colors.statusSafe : presentation.color;
+
   const mapLatitude = lastReading?.latitude ?? journey?.origin.latitude ?? 13.0827;
   const mapLongitude = lastReading?.longitude ?? journey?.origin.longitude ?? 80.2707;
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
-      <ConnectionBadge online={online} queuedReadings={queuedReadings} />
+    <View style={styles.screen}>
+      {/* Status strip — the one thing that must be readable at a glance. */}
+      <View style={styles.statusBar}>
+        <View style={styles.statusText}>
+          <Text
+            accessibilityRole="header"
+            style={[styles.headline, { color: statusColor }]}
+            numberOfLines={2}
+          >
+            {presentation.marker} {headline}
+          </Text>
+          {destination ? (
+            <Text style={styles.destination} numberOfLines={1}>
+              To {destination}
+            </Text>
+          ) : null}
+        </View>
+        {!online ? (
+          <ConnectionBadge online={online} queuedReadings={queuedReadings} />
+        ) : null}
+      </View>
 
-      <SafetyStatusBanner
-        state={safetyState}
-        destination={destination}
-        pausedAt={place.paused ? place.current : null}
+      <JourneyMap
+        plannedRoute={plannedRoute}
+        trail={trail}
+        latitude={lastReading?.latitude ?? null}
+        longitude={lastReading?.longitude ?? null}
+        heading={lastReading?.heading ?? 0}
+        safetyState={safetyState}
+        places={place.saved}
       />
 
-      <PlacePanel
-        place={place}
-        canSave={lastReading !== null}
-        onSave={(label) => void savePlace(label)}
-        onPickOnMap={(label) => setPickingLabel(label)}
-      />
+      <View style={styles.sheet}>
+        {error ? (
+          <View accessibilityRole="alert" style={styles.error}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        ) : null}
+
+        <JourneyStats fix={fix} accuracyMeters={lastReading?.accuracy ?? null} />
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={showDetails ? "Hide journey details" : "Show journey details"}
+          accessibilityState={{ expanded: showDetails }}
+          onPress={() => setShowDetails((open) => !open)}
+          style={styles.detailsToggle}
+        >
+          <Text style={styles.detailsLabel} numberOfLines={1}>
+            {place.paused
+              ? `At ${place.current} — checks paused`
+              : telemetry
+                ? summarise(telemetry.deviationMeters, telemetry.inactivitySeconds)
+                : "Following your route"}
+          </Text>
+          <Text style={styles.detailsChevron}>{showDetails ? "Hide" : "Details"}</Text>
+        </Pressable>
+
+        {showDetails ? (
+          <ScrollView style={styles.details} keyboardShouldPersistTaps="handled">
+            <View style={styles.detailsInner}>
+              {/* Actionable first; telemetry is reference material. */}
+              <PlacePanel
+                place={place}
+                canSave={lastReading !== null}
+                onSave={(label, radiusMeters) => void savePlace(label, undefined, radiusMeters)}
+                onPickOnMap={(label) => setPickingLabel(label)}
+              />
+              <TelemetryPanel
+                telemetry={telemetry}
+                etaSeconds={journey?.route.eta_seconds ?? null}
+                distanceMeters={journey?.route.distance_meters ?? null}
+              />
+              <AccessibleButton
+                label="End journey"
+                variant="secondary"
+                onPress={() => void stop()}
+                accessibilityHint="Stops sharing your location with AURA."
+              />
+            </View>
+          </ScrollView>
+        ) : null}
+
+        {/* Held, not tapped: this notifies a trusted contact and opens an
+            incident, and there is no quiet undo. */}
+        <HoldButton
+          label="I need help"
+          holdingLabel="Keep holding"
+          busy={respondingToCheck}
+          onActivate={() => respond("HELP")}
+          accessibilityHint="Press and hold for three seconds to notify your trusted contact."
+        />
+      </View>
 
       <PlacePickerModal
         visible={pickingLabel !== null}
@@ -67,76 +163,97 @@ export function JourneyScreen({ monitor }: Props) {
         initialLongitude={mapLongitude}
         busy={place.saving}
         onCancel={() => setPickingLabel(null)}
-        onConfirm={(latitude, longitude) => {
+        onConfirm={(latitude, longitude, radiusMeters) => {
           const label = pickingLabel;
           setPickingLabel(null);
-          if (label) void savePlace(label, { latitude, longitude });
+          if (label) void savePlace(label, { latitude, longitude }, radiusMeters);
         }}
       />
-
-      <TelemetryPanel
-        telemetry={telemetry}
-        etaSeconds={journey?.route.eta_seconds ?? null}
-        distanceMeters={journey?.route.distance_meters ?? null}
-      />
-
-      {lastReading ? (
-        <Text style={styles.fix}>
-          Last fix {lastReading.latitude.toFixed(5)}, {lastReading.longitude.toFixed(5)} ·
-          ±{Math.round(lastReading.accuracy)} m
-        </Text>
-      ) : null}
-
-      {error ? (
-        <View accessibilityRole="alert" style={styles.error}>
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      ) : null}
-
-      <View style={styles.actions}>
-        <AccessibleButton
-          label="I need help"
-          variant="risk"
-          size="safety"
-          busy={respondingToCheck}
-          onPress={() => respond("HELP")}
-          accessibilityHint="Notifies your trusted contact immediately."
-        />
-        <AccessibleButton
-          label="End journey"
-          variant="secondary"
-          onPress={() => void stop()}
-          accessibilityHint="Stops sharing your location with AURA."
-        />
-      </View>
-    </ScrollView>
+    </View>
   );
 }
 
+/** One short line, per AURA_DESIGN.md section 26: "420 m off route" beats a chart. */
+function summarise(deviationMeters: number, inactivitySeconds: number): string {
+  if (deviationMeters >= 50) return `${Math.round(deviationMeters)} m off route`;
+  if (inactivitySeconds >= 60) {
+    const minutes = Math.round(inactivitySeconds / 60);
+    return `Stopped for ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  return "On your way";
+}
+
 const styles = StyleSheet.create({
-  content: {
-    padding: space.section,
-    gap: space.default,
-    paddingBottom: space.large,
+  screen: {
+    flex: 1,
+    backgroundColor: colors.background,
   },
-  fix: {
-    color: colors.textMuted,
+  statusBar: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: space.compact,
+    paddingHorizontal: space.default,
+    paddingBottom: space.tight,
+    paddingTop: space.micro,
+  },
+  statusText: {
+    flex: 1,
+  },
+  headline: {
+    fontSize: fontSize.section,
+    fontWeight: fontWeight.semibold,
+    // "Your trusted contact has been notified." must never be truncated.
+    lineHeight: 27,
+  },
+  destination: {
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    gap: space.compact,
+    paddingHorizontal: space.default,
+    paddingTop: space.default,
+    paddingBottom: space.default,
+  },
+  detailsToggle: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: touchTarget.min,
+  },
+  detailsLabel: {
+    color: colors.text,
+    flex: 1,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.medium,
+  },
+  detailsChevron: {
+    color: colors.statusInfo,
+    fontSize: fontSize.meta,
+    fontWeight: fontWeight.medium,
+  },
+  details: {
+    // Enough room for the expanded place editor without burying the map.
+    // The map is flex:1, so it simply gives up the space while this is open.
+    maxHeight: Math.round(Dimensions.get("window").height * 0.42),
+  },
+  detailsInner: {
+    gap: space.compact,
+    paddingBottom: space.tight,
   },
   error: {
     backgroundColor: colors.surface,
     borderColor: colors.statusRisk,
-    borderRadius: 12,
+    borderRadius: radius.md,
     borderWidth: 1,
-    padding: space.default,
+    padding: space.compact,
   },
   errorText: {
     color: colors.statusRisk,
-    fontSize: fontSize.body,
-    lineHeight: 22,
-  },
-  actions: {
-    gap: space.compact,
-    paddingTop: space.tight,
+    fontSize: fontSize.meta,
+    lineHeight: 19,
   },
 });

@@ -3,6 +3,7 @@ import { Modal, StyleSheet, Text, Vibration, View } from "react-native";
 
 import { AccessibleButton } from "./AccessibleButton";
 import { colors, fontSize, fontWeight, space } from "../constants/theme";
+import { alertFeedback } from "../services/haptics";
 import { speakUrgent, stopSpeaking } from "../services/speech";
 import type { CheckinResponse, PendingSafetyCheck } from "../types/api";
 
@@ -44,8 +45,14 @@ export function SafetyCheckModal({ visible, check, busy, onRespond }: Props) {
       return;
     }
 
+    // The buzz has to carry from a pocket, so the coarse Vibration pattern
+    // stays; the haptic notification rides alongside it for in-hand clarity.
     Vibration.vibrate(PULSE_PATTERN);
-    const pulse = setInterval(() => Vibration.vibrate(PULSE_PATTERN), PULSE_INTERVAL_MS);
+    alertFeedback();
+    const pulse = setInterval(() => {
+      Vibration.vibrate(PULSE_PATTERN);
+      alertFeedback();
+    }, PULSE_INTERVAL_MS);
 
     const tick = () => {
       const left = remainingSeconds(check);

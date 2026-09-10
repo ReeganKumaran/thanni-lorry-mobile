@@ -11,23 +11,46 @@ import {
 } from "react-native";
 
 import { AccessibleButton } from "../components/AccessibleButton";
+import { PlacePanel } from "../components/PlacePanel";
+import { PlacePickerModal } from "../components/PlacePickerModal";
 import { colors, fontSize, fontWeight, radius, space, touchTarget } from "../constants/theme";
 import { checkHealth } from "../services/api";
 import { getApiOrigin, setApiOrigin } from "../services/config";
+import type { PlaceState } from "../hooks/useJourneyMonitor";
 
 type Props = {
   starting: boolean;
   error: string | null;
   onStart: (destination: string) => void;
   onDismissError: () => void;
+  place: PlaceState;
+  savePlace: (
+    label: string,
+    coords?: { latitude: number; longitude: number },
+    radiusMeters?: number,
+  ) => void;
 };
 
-/** Somewhere to start from without typing an address on a phone in the street. */
-const QUICK_DESTINATIONS = ["Home", "Railway Station", "Work"];
+/** Fallbacks until the traveller has saved any places of their own. */
+const FALLBACK_DESTINATIONS = ["Home", "Work", "Station"];
 
 type BackendState = "unknown" | "checking" | "reachable" | "unreachable";
 
-export function HomeScreen({ starting, error, onStart, onDismissError }: Props) {
+export function HomeScreen({
+  starting,
+  error,
+  onStart,
+  onDismissError,
+  place,
+  savePlace,
+}: Props) {
+  const [pickingLabel, setPickingLabel] = useState<string | null>(null);
+
+  // Your saved places are the destinations you actually travel to.
+  const quickDestinations =
+    place.saved.length > 0
+      ? place.saved.map((p) => p.label).slice(0, 4)
+      : FALLBACK_DESTINATIONS;
   const [destination, setDestination] = useState("");
   const [showBackend, setShowBackend] = useState(false);
   const [host, setHost] = useState(getApiOrigin());
@@ -83,7 +106,7 @@ export function HomeScreen({ starting, error, onStart, onDismissError }: Props) 
         />
 
         <View style={styles.quickRow}>
-          {QUICK_DESTINATIONS.map((preset) => {
+          {quickDestinations.map((preset) => {
             const selected = destination.trim() === preset;
             return (
               <Pressable
@@ -114,6 +137,33 @@ export function HomeScreen({ starting, error, onStart, onDismissError }: Props) 
           busy={starting}
           disabled={destination.trim().length === 0}
           accessibilityHint="Begins sharing your location with AURA."
+        />
+
+        {destination.trim().length === 0 ? (
+          <Text style={styles.startHint}>
+            Type where you&apos;re going, or tap one above.
+          </Text>
+        ) : null}
+
+        <PlacePanel
+          place={place}
+          canSave
+          onSave={(label, radiusMeters) => savePlace(label, undefined, radiusMeters)}
+          onPickOnMap={(label) => setPickingLabel(label)}
+        />
+
+        <PlacePickerModal
+          visible={pickingLabel !== null}
+          label={pickingLabel ?? ""}
+          initialLatitude={13.0827}
+          initialLongitude={80.2707}
+          busy={place.saving}
+          onCancel={() => setPickingLabel(null)}
+          onConfirm={(latitude, longitude, radiusMeters) => {
+            const label = pickingLabel;
+            setPickingLabel(null);
+            if (label) savePlace(label, { latitude, longitude }, radiusMeters);
+          }}
         />
 
         <View style={styles.backend}>
@@ -232,7 +282,7 @@ const styles = StyleSheet.create({
   quickRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: space.compact,
+    gap: space.tight,
   },
   quickChip: {
     backgroundColor: colors.surface,
@@ -241,7 +291,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     justifyContent: "center",
     minHeight: touchTarget.min,
-    paddingHorizontal: space.default,
+    paddingHorizontal: space.compact,
   },
   quickChipSelected: {
     backgroundColor: colors.surfaceMuted,
@@ -254,6 +304,12 @@ const styles = StyleSheet.create({
   quickLabelSelected: {
     color: colors.text,
     fontWeight: fontWeight.medium,
+  },
+  startHint: {
+    color: colors.textMuted,
+    fontSize: fontSize.meta,
+    marginTop: -space.tight,
+    textAlign: "center",
   },
   error: {
     backgroundColor: colors.surface,

@@ -91,6 +91,34 @@ export type KnownPlace = {
 export const PLACE_LABELS = ["Home", "Office", "College"] as const;
 export type PlaceLabel = (typeof PLACE_LABELS)[number];
 
+/**
+ * How much ground a saved place covers.
+ *
+ * A flat and a university campus are both "somewhere I stop", but a radius that
+ * suits one swallows the street outside the other. The hint says what each size
+ * is actually for, since metres mean little until you see the circle.
+ */
+export const PLACE_SIZES = [
+  { key: "small", label: "Small", meters: 200, hint: "A house or flat" },
+  { key: "medium", label: "Medium", meters: 500, hint: "An office or building" },
+  { key: "large", label: "Large", meters: 1500, hint: "A campus or neighbourhood" },
+] as const;
+
+export type PlaceSizeKey = (typeof PLACE_SIZES)[number]["key"];
+
+export const DEFAULT_PLACE_SIZE: PlaceSizeKey = "small";
+
+export function metersForSize(key: PlaceSizeKey): number {
+  return PLACE_SIZES.find((s) => s.key === key)?.meters ?? 200;
+}
+
+/** Nearest size band to a radius already stored on the backend. */
+export function sizeForMeters(meters: number): PlaceSizeKey {
+  return PLACE_SIZES.reduce((best, size) =>
+    Math.abs(size.meters - meters) < Math.abs(best.meters - meters) ? size : best,
+  ).key;
+}
+
 export type SafetyStatus = {
   journey_id?: string;
   safety_state: SafetyState;

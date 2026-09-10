@@ -8,6 +8,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { DEFAULT_PLACE_SIZE, metersForSize } from "../types/api";
+import { directRoute, fetchWalkingRoute } from "../services/routing";
+import type { RoutePoint } from "../services/routing";
+import { searchPlaces } from "../services/geocoding";
 import type {
   CheckinResponse,
   Journey,
@@ -37,6 +41,13 @@ import { speak, speakUrgent } from "../services/speech";
 /** How often to ask the backend what it thinks the safety state is. */
 const SAFETY_POLL_MS = 4000;
 
+/**
+ * The trail drawn on the map. Points closer together than this add nothing but
+ * memory, and the cap keeps a long walk from growing without bound.
+ */
+const TRAIL_MIN_SPACING_METERS = 6;
+const MAX_TRAIL_POINTS = 2000;
+
 export type MonitorPhase = "idle" | "starting" | "active" | "error";
 
 export type Telemetry = {
@@ -44,6 +55,30 @@ export type Telemetry = {
   deviationMeters: number;
   etaDeltaSeconds: number;
   inactivitySeconds: number;
+};
+
+/** One step of where the traveller has actually been. */
+export type TrailPoint = {
+  latitude: number;
+  longitude: number;
+  safetyState: SafetyState;
+};
+
+/**
+ * Evidence that tracking is actually working.
+ *
+ * A monitoring app that has quietly stopped receiving fixes looks identical to
+ * one that is working, so the journey screen shows this rather than implying it.
+ */
+export type FixState = {
+  /** Epoch ms of the most recent GPS fix, null before the first. */
+  lastFixAt: number | null;
+  /** How many fixes this journey has produced. */
+  count: number;
+  /** Metres walked, summed along the trail. */
+  distanceMeters: number;
+  /** Epoch ms the journey started. */
+  startedAt: number | null;
 };
 
 export type PlaceState = {
@@ -63,12 +98,19 @@ export type JourneyMonitor = {
   safetyState: SafetyState;
   telemetry: Telemetry | null;
   lastReading: LocationUpdateBody | null;
+  /** Actual route walked so far, for the map. */
+  trail: TrailPoint[];
+  /** Planned route, when one could be worked out. */
+  plannedRoute: RoutePoint[];
+  /** Live proof that GPS is still arriving. */
+  fix: FixState;
   pendingCheck: PendingSafetyCheck | null;
   place: PlaceState;
   /** Saves the given point, or the last GPS fix when no point is supplied. */
   savePlace: (
     label: string,
     coords?: { latitude: number; longitude: number },
+    radiusMeters?: number,
   ) => Promise<void>;
   /** False while readings are queueing because the backend is unreachable. */
   online: boolean;
@@ -79,6 +121,40 @@ export type JourneyMonitor = {
   respond: (response: CheckinResponse) => Promise<void>;
   dismissError: () => void;
 };
+
+function roughDistanceMeters(
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number },
+): number {
+  const metresPerDegree = 111_320;
+  const dLat = (a.latitude - b.latitude) * metresPerDegree;
+  const dLng =
+    (a.longitude - b.longitude) *
+    metresPerDegree *
+    Math.cos((a.latitude * Math.PI) / 180);
+  return Math.hypot(dLat, dLng);
+}
+
+/**
+ * Turn what the traveller typed into coordinates.
+ *
+ * Their own saved places win: "Home" should mean their home, not the nearest
+ * place OpenStreetMap happens to call that.
+ */
+async function resolveDestination(
+  text: string,
+  saved: KnownPlace[],
+): Promise<{ latitude: number; longitude: number } | null> {
+  const match = saved.find((p) => p.label.toLowerCase() === text.toLowerCase());
+  if (match) return { latitude: match.latitude, longitude: match.longitude };
+
+  try {
+    const [first] = await searchPlaces(text);
+    return first ? { latitude: first.latitude, longitude: first.longitude } : null;
+  } catch {
+    return null;
+  }
+}
 
 export function useJourneyMonitor(): JourneyMonitor {
   const [phase, setPhase] = useState<MonitorPhase>("idle");
@@ -95,6 +171,12 @@ export function useJourneyMonitor(): JourneyMonitor {
   const [monitoringPaused, setMonitoringPaused] = useState(false);
   const [savedPlaces, setSavedPlaces] = useState<KnownPlace[]>([]);
   const [savingPlace, setSavingPlace] = useState(false);
+  const [trail, setTrail] = useState<TrailPoint[]>([]);
+  const [plannedRoute, setPlannedRoute] = useState<RoutePoint[]>([]);
+  const [lastFixAt, setLastFixAt] = useState<number | null>(null);
+  const [fixCount, setFixCount] = useState(0);
+  const [distanceMeters, setDistanceMeters] = useState(0);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
 
   const streamerRef = useRef<LocationStreamer>(new LocationStreamer());
   const journeyIdRef = useRef<string | null>(null);
@@ -186,6 +268,22 @@ export function useJourneyMonitor(): JourneyMonitor {
           origin = null;
         }
 
+        // A planned route is what makes "off route" mean anything. Resolve the
+        // destination first: a saved place is exact and free, otherwise fall
+        // back to searching OpenStreetMap for the text the traveller typed.
+        let route: RoutePoint[] = [];
+        if (origin) {
+          const destination = await resolveDestination(trimmed, savedPlaces);
+          if (destination) {
+            // A straight line beats no route at all: deviation needs something
+            // to measure against, and the router is often unusable here.
+            const planned =
+              (await fetchWalkingRoute(origin, destination)) ??
+              directRoute(origin, destination);
+            route = planned.coordinates;
+          }
+        }
+
         const created = await createJourney({
           destination_text: trimmed,
           ...(origin
@@ -197,6 +295,7 @@ export function useJourneyMonitor(): JourneyMonitor {
                 },
               }
             : {}),
+          ...(route.length >= 2 ? { route } : {}),
         });
 
         if (!mountedRef.current) return;
@@ -208,12 +307,45 @@ export function useJourneyMonitor(): JourneyMonitor {
         setTelemetry(null);
         setLastReading(origin);
         setPendingCheck(null);
+        setPlannedRoute(route);
         setQueuedReadings(0);
         setOnline(true);
+        setLastFixAt(null);
+        setFixCount(0);
+        setDistanceMeters(0);
+        setStartedAt(Date.now());
         setPhase("active");
 
         await streamerRef.current.start(created.id, {
           onTelemetry: handleTelemetry,
+          onReadingCaptured: (reading) => {
+            if (!mountedRef.current) return;
+            setLastReading(reading);
+            setLastFixAt(Date.now());
+            setFixCount((n) => n + 1);
+            setTrail((previous) => {
+              const last = previous[previous.length - 1];
+              if (last && roughDistanceMeters(last, reading) < TRAIL_MIN_SPACING_METERS) {
+                return previous;
+              }
+              if (last) {
+                const step = roughDistanceMeters(last, reading);
+                // Ignore obvious GPS jumps rather than inflating the total.
+                if (step < 100) setDistanceMeters((d) => d + step);
+              }
+              const next = [
+                ...previous,
+                {
+                  latitude: reading.latitude,
+                  longitude: reading.longitude,
+                  safetyState: safetyStateRef.current,
+                },
+              ];
+              return next.length > MAX_TRAIL_POINTS
+                ? next.slice(next.length - MAX_TRAIL_POINTS)
+                : next;
+            });
+          },
           onConnectionChange: (isOnline) => {
             if (mountedRef.current) setOnline(isOnline);
           },
@@ -241,7 +373,7 @@ export function useJourneyMonitor(): JourneyMonitor {
         setError(err instanceof Error ? err.message : "Could not start the journey.");
       }
     },
-    [handleTelemetry],
+    [handleTelemetry, savedPlaces],
   );
 
   const stop = useCallback(async () => {
@@ -257,6 +389,12 @@ export function useJourneyMonitor(): JourneyMonitor {
     setQueuedReadings(0);
     setAtPlace(null);
     setMonitoringPaused(false);
+    setTrail([]);
+    setPlannedRoute([]);
+    setLastFixAt(null);
+    setFixCount(0);
+    setDistanceMeters(0);
+    setStartedAt(null);
     setError(null);
   }, []);
 
@@ -350,19 +488,38 @@ export function useJourneyMonitor(): JourneyMonitor {
 
   /** Save wherever the traveller is standing as Home, Office or College. */
   const savePlace = useCallback(
-    async (label: string, coords?: { latitude: number; longitude: number }) => {
-      const point = coords ?? lastReading;
+    async (
+      label: string,
+      coords?: { latitude: number; longitude: number },
+      radiusMeters: number = metersForSize(DEFAULT_PLACE_SIZE),
+    ) => {
+      setSavingPlace(true);
+
+      let point = coords ?? lastReading;
       if (!point) {
-        setError("Waiting for a GPS fix before this spot can be saved.");
-        return;
+        // No journey running, so there is no GPS stream to borrow from.
+        try {
+          const permission = await requestLocationPermission();
+          if (!permission.granted) {
+            setError(
+              "AURA needs your location to save this spot. Use \u201COn map\u201D instead.",
+            );
+            setSavingPlace(false);
+            return;
+          }
+          point = await getCurrentPosition();
+        } catch {
+          setError("Couldn't get a GPS fix. Use \u201COn map\u201D instead.");
+          setSavingPlace(false);
+          return;
+        }
       }
 
-      setSavingPlace(true);
       try {
-        await createPlace(label, point.latitude, point.longitude);
+        await createPlace(label, point.latitude, point.longitude, radiusMeters);
         if (!mountedRef.current) return;
         // Only claim to be there when the point came from the live GPS fix.
-        if (!coords) {
+        if (!coords && phase === "active") {
           setAtPlace(label);
           setMonitoringPaused(true);
         }
@@ -380,11 +537,11 @@ export function useJourneyMonitor(): JourneyMonitor {
         if (mountedRef.current) setSavingPlace(false);
       }
     },
-    [lastReading, refreshPlaces],
+    [lastReading, refreshPlaces, phase],
   );
 
   useEffect(() => {
-    if (phase === "active") void refreshPlaces();
+    void refreshPlaces();
   }, [phase, refreshPlaces]);
 
   const dismissError = useCallback(() => setError(null), []);
@@ -396,6 +553,9 @@ export function useJourneyMonitor(): JourneyMonitor {
     safetyState,
     telemetry,
     lastReading,
+    trail,
+    plannedRoute,
+    fix: { lastFixAt, count: fixCount, distanceMeters, startedAt },
     pendingCheck,
     place: {
       current: atPlace,

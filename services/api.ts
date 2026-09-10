@@ -151,10 +151,16 @@ export function createPlace(
   label: string,
   latitude: number,
   longitude: number,
+  radiusMeters: number,
 ): Promise<KnownPlace> {
   return request<KnownPlace>("/places", {
     method: "POST",
-    body: JSON.stringify({ label, latitude, longitude }),
+    body: JSON.stringify({
+      label,
+      latitude,
+      longitude,
+      radius_meters: radiusMeters,
+    }),
   });
 }
 
