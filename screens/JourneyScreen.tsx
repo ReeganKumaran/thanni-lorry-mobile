@@ -1,7 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { AccessibleButton } from "../components/AccessibleButton";
 import { ConnectionBadge } from "../components/ConnectionBadge";
 import { HoldButton } from "../components/HoldButton";
 import { JourneyMap } from "../components/JourneyMap";
@@ -53,6 +52,18 @@ export function JourneyScreen({ monitor }: Props) {
   const [pickingLabel, setPickingLabel] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
+  // Ending a journey stops safety monitoring, so it asks once — but as a second
+  // tap rather than a dialog, which would be its own thing to dismiss.
+  const [confirmEnd, setConfirmEnd] = useState(false);
+
+  useEffect(() => {
+    if (!confirmEnd) return;
+    // Long enough for a screen reader to announce the confirm prompt and the
+    // traveller to act on it, short enough that a stray tap does not linger.
+    const timer = setTimeout(() => setConfirmEnd(false), 6000);
+    return () => clearTimeout(timer);
+  }, [confirmEnd]);
+
   const destination = journey?.destination.name ?? null;
   const presentation = presentSafetyState(safetyState);
   const headline = place.paused ? `At ${place.current}` : presentation.headline;
@@ -82,6 +93,27 @@ export function JourneyScreen({ monitor }: Props) {
         {!online ? (
           <ConnectionBadge online={online} queuedReadings={queuedReadings} />
         ) : null}
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            confirmEnd ? "Tap again to end the journey" : "End journey"
+          }
+          accessibilityHint="Stops sharing your location with AURA."
+          onPress={() => {
+            if (confirmEnd) {
+              setConfirmEnd(false);
+              void stop();
+            } else {
+              setConfirmEnd(true);
+            }
+          }}
+          style={[styles.endButton, confirmEnd && styles.endButtonConfirm]}
+        >
+          <Text style={[styles.endLabel, confirmEnd && styles.endLabelConfirm]}>
+            {confirmEnd ? "Tap to confirm" : "End"}
+          </Text>
+        </Pressable>
       </View>
 
       <JourneyMap
@@ -134,12 +166,6 @@ export function JourneyScreen({ monitor }: Props) {
                 telemetry={telemetry}
                 etaSeconds={journey?.route.eta_seconds ?? null}
                 distanceMeters={journey?.route.distance_meters ?? null}
-              />
-              <AccessibleButton
-                label="End journey"
-                variant="secondary"
-                onPress={() => void stop()}
-                accessibilityHint="Stops sharing your location with AURA."
               />
             </View>
           </ScrollView>
@@ -208,6 +234,27 @@ const styles = StyleSheet.create({
   destination: {
     color: colors.textSecondary,
     fontSize: fontSize.meta,
+  },
+  endButton: {
+    justifyContent: "center",
+    minHeight: touchTarget.min,
+    paddingHorizontal: space.compact,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  endButtonConfirm: {
+    borderColor: colors.statusAttention,
+    backgroundColor: colors.surfaceMuted,
+  },
+  endLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.meta,
+    fontWeight: fontWeight.medium,
+  },
+  endLabelConfirm: {
+    color: colors.statusAttention,
   },
   sheet: {
     backgroundColor: colors.surface,
