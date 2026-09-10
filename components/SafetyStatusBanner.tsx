@@ -7,14 +7,23 @@ import type { SafetyState } from "../types/api";
 type Props = {
   state: SafetyState;
   destination?: string | null;
+  /** Set while inside a saved place, where no checks are raised. */
+  pausedAt?: string | null;
 };
 
 /**
  * The one place the traveller looks to know where they stand. Status is carried
  * by text and a shape marker as well as colour (AURA_DESIGN.md section 30).
  */
-export function SafetyStatusBanner({ state, destination }: Props) {
-  const { headline, detail, color, marker } = presentSafetyState(state);
+export function SafetyStatusBanner({ state, destination, pausedAt }: Props) {
+  const base = presentSafetyState(state);
+  const { headline, detail, color, marker } = pausedAt
+    ? {
+        ...base,
+        headline: `You're at ${pausedAt}.`,
+        detail: "Checks are paused here. AURA picks up again when you leave.",
+      }
+    : base;
 
   return (
     <View

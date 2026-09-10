@@ -18,6 +18,17 @@ export const API_PREFIX = "/api/v1";
 
 let overrideBaseUrl: string | null = null;
 
+/**
+ * Anything reaching us from the Expo config or process.env is unvalidated at
+ * runtime, whatever its declared type says. `extra: { auraApiUrl: null }` in
+ * app.json, for instance, resolves to `{}` — truthy, and with no `.trim`.
+ */
+function asHostString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
 function normalize(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, "");
   if (!trimmed) return "";
@@ -27,10 +38,10 @@ function normalize(raw: string): string {
 
 /** Host:port the Expo dev server is being served from, e.g. "192.168.1.10:8081". */
 function expoHostUri(): string | null {
-  const config = Constants.expoConfig as { hostUri?: string } | null;
-  const legacy = (Constants as unknown as { expoGoConfig?: { debuggerHost?: string } })
+  const config = Constants.expoConfig as Record<string, unknown> | null;
+  const legacy = (Constants as unknown as { expoGoConfig?: Record<string, unknown> })
     .expoGoConfig;
-  return config?.hostUri ?? legacy?.debuggerHost ?? null;
+  return asHostString(config?.hostUri) ?? asHostString(legacy?.debuggerHost);
 }
 
 function fromExpoHost(): string | null {
@@ -42,10 +53,9 @@ function fromExpoHost(): string | null {
 }
 
 function fromEnv(): string | null {
-  const fromProcess = process.env.EXPO_PUBLIC_AURA_API_URL;
-  const fromExtra = (Constants.expoConfig?.extra as { auraApiUrl?: string } | undefined)
-    ?.auraApiUrl;
-  const raw = fromProcess || fromExtra;
+  const extra = Constants.expoConfig?.extra as Record<string, unknown> | undefined;
+  const raw =
+    asHostString(process.env.EXPO_PUBLIC_AURA_API_URL) ?? asHostString(extra?.auraApiUrl);
   return raw ? normalize(raw) : null;
 }
 
@@ -65,12 +75,13 @@ export function getApiBaseUrl(): string {
  * automatic resolution.
  */
 export function setApiOrigin(value: string | null): string {
-  if (value === null || value.trim() === "") {
+  const host = asHostString(value);
+  if (host === null) {
     overrideBaseUrl = null;
     return getApiOrigin();
   }
 
-  let candidate = normalize(value);
+  let candidate = normalize(host);
   // A bare host with no port is almost always meant to hit the API port.
   if (!/:\d+$/.test(candidate.replace(/^https?:\/\//i, ""))) {
     candidate = `${candidate}:${API_PORT}`;

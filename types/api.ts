@@ -70,7 +70,26 @@ export type LocationUpdateResult = {
   eta_delta_seconds: number;
   inactivity_seconds: number;
   safety_state: SafetyState;
+  /** Label of the saved place the traveller is inside, if any. */
+  at_place: string | null;
+  /** True while inside a saved place — no safety checks are raised. */
+  monitoring_paused: boolean;
 };
+
+/** Somewhere the traveller has told AURA that standing still is normal. */
+export type KnownPlace = {
+  id: string;
+  user_id: string;
+  label: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+  created_at: string;
+};
+
+/** The labels offered as one-tap saves. */
+export const PLACE_LABELS = ["Home", "Office", "College"] as const;
+export type PlaceLabel = (typeof PLACE_LABELS)[number];
 
 export type SafetyStatus = {
   journey_id?: string;

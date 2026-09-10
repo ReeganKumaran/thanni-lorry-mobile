@@ -9,6 +9,7 @@
 import type {
   BaseDomainEvent,
   CheckinResponse,
+  KnownPlace,
   CheckinResult,
   CreateJourneyBody,
   Journey,
@@ -136,6 +137,31 @@ export function respondToCheckin(
       body: JSON.stringify({ response, transcript: transcript ?? null }),
     },
   );
+}
+
+export function listPlaces(): Promise<KnownPlace[]> {
+  return request<KnownPlace[]>("/places");
+}
+
+/**
+ * Save a spot where being stopped is normal. Re-using a label replaces it, so
+ * "Home" can never end up meaning two different buildings.
+ */
+export function createPlace(
+  label: string,
+  latitude: number,
+  longitude: number,
+): Promise<KnownPlace> {
+  return request<KnownPlace>("/places", {
+    method: "POST",
+    body: JSON.stringify({ label, latitude, longitude }),
+  });
+}
+
+export function deletePlace(placeId: string): Promise<unknown> {
+  return request<unknown>(`/places/${encodeURIComponent(placeId)}`, {
+    method: "DELETE",
+  });
 }
 
 export function getEventHistory(): Promise<BaseDomainEvent[]> {

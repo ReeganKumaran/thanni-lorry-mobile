@@ -19,7 +19,9 @@
         "NSLocationAlwaysAndWhenInUseUsageDescription": "AURA keeps monitoring your journey in the background so a deviation or a long stop is noticed even when the screen is off.",
         "NSCameraUsageDescription": "AURA uses the camera to describe obstacles and signage ahead of you.",
         "NSMicrophoneUsageDescription": "AURA lets you answer a safety check by voice.",
-        "UIBackgroundModes": ["location"]
+        "UIBackgroundModes": [
+          "location"
+        ]
       }
     },
     "android": {
@@ -53,9 +55,6 @@
           "cameraPermission": "AURA uses the camera to describe obstacles and signage ahead of you."
         }
       ]
-    ],
-    "extra": {
-      "auraApiUrl": null
-    }
+    ]
   }
 }

@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CheckinResponse,
   Journey,
+  KnownPlace,
   LocationUpdateBody,
   LocationUpdateResult,
   PendingSafetyCheck,
@@ -19,8 +20,10 @@ import type {
 } from "../types/api";
 import {
   createJourney,
+  createPlace,
   fetchPendingSafetyCheck,
   getSafetyStatus,
+  listPlaces,
   respondToCheckin,
 } from "../services/api";
 import {
@@ -43,6 +46,16 @@ export type Telemetry = {
   inactivitySeconds: number;
 };
 
+export type PlaceState = {
+  /** Saved place the traveller is currently inside, if any. */
+  current: string | null;
+  /** True while inside one — AURA raises no safety checks. */
+  paused: boolean;
+  /** Every place saved so far. */
+  saved: KnownPlace[];
+  saving: boolean;
+};
+
 export type JourneyMonitor = {
   phase: MonitorPhase;
   error: string | null;
@@ -51,6 +64,12 @@ export type JourneyMonitor = {
   telemetry: Telemetry | null;
   lastReading: LocationUpdateBody | null;
   pendingCheck: PendingSafetyCheck | null;
+  place: PlaceState;
+  /** Saves the given point, or the last GPS fix when no point is supplied. */
+  savePlace: (
+    label: string,
+    coords?: { latitude: number; longitude: number },
+  ) => Promise<void>;
   /** False while readings are queueing because the backend is unreachable. */
   online: boolean;
   queuedReadings: number;
@@ -72,6 +91,10 @@ export function useJourneyMonitor(): JourneyMonitor {
   const [online, setOnline] = useState(true);
   const [queuedReadings, setQueuedReadings] = useState(0);
   const [respondingToCheck, setRespondingToCheck] = useState(false);
+  const [atPlace, setAtPlace] = useState<string | null>(null);
+  const [monitoringPaused, setMonitoringPaused] = useState(false);
+  const [savedPlaces, setSavedPlaces] = useState<KnownPlace[]>([]);
+  const [savingPlace, setSavingPlace] = useState(false);
 
   const streamerRef = useRef<LocationStreamer>(new LocationStreamer());
   const journeyIdRef = useRef<string | null>(null);
@@ -116,6 +139,16 @@ export function useJourneyMonitor(): JourneyMonitor {
         etaDeltaSeconds: result.eta_delta_seconds,
         inactivitySeconds: result.inactivity_seconds,
       });
+
+      const place = result.at_place ?? null;
+      setAtPlace((previous) => {
+        if (previous === place) return previous;
+        if (place) speak(`You're at ${place}. I'll stop checking in.`, "navigation");
+        else if (previous) speak("Monitoring your journey again.", "navigation");
+        return place;
+      });
+      setMonitoringPaused(result.monitoring_paused === true);
+
       applySafetyState(result.safety_state);
     },
     [applySafetyState],
@@ -222,6 +255,8 @@ export function useJourneyMonitor(): JourneyMonitor {
     setPendingCheck(null);
     setSafetyState("SAFE");
     setQueuedReadings(0);
+    setAtPlace(null);
+    setMonitoringPaused(false);
     setError(null);
   }, []);
 
@@ -304,6 +339,54 @@ export function useJourneyMonitor(): JourneyMonitor {
     };
   }, [safetyState, pendingCheck]);
 
+  const refreshPlaces = useCallback(async () => {
+    try {
+      const places = await listPlaces();
+      if (mountedRef.current) setSavedPlaces(places);
+    } catch {
+      // Non-critical: the save buttons still work without the current list.
+    }
+  }, []);
+
+  /** Save wherever the traveller is standing as Home, Office or College. */
+  const savePlace = useCallback(
+    async (label: string, coords?: { latitude: number; longitude: number }) => {
+      const point = coords ?? lastReading;
+      if (!point) {
+        setError("Waiting for a GPS fix before this spot can be saved.");
+        return;
+      }
+
+      setSavingPlace(true);
+      try {
+        await createPlace(label, point.latitude, point.longitude);
+        if (!mountedRef.current) return;
+        // Only claim to be there when the point came from the live GPS fix.
+        if (!coords) {
+          setAtPlace(label);
+          setMonitoringPaused(true);
+        }
+        speak(
+          coords
+            ? `${label} saved. I won't check in while you're there.`
+            : `Saved as ${label}. I won't check in while you're here.`,
+          "navigation",
+        );
+        await refreshPlaces();
+      } catch (err) {
+        if (!mountedRef.current) return;
+        setError(err instanceof Error ? err.message : `Could not save ${label}.`);
+      } finally {
+        if (mountedRef.current) setSavingPlace(false);
+      }
+    },
+    [lastReading, refreshPlaces],
+  );
+
+  useEffect(() => {
+    if (phase === "active") void refreshPlaces();
+  }, [phase, refreshPlaces]);
+
   const dismissError = useCallback(() => setError(null), []);
 
   return {
@@ -314,6 +397,13 @@ export function useJourneyMonitor(): JourneyMonitor {
     telemetry,
     lastReading,
     pendingCheck,
+    place: {
+      current: atPlace,
+      paused: monitoringPaused,
+      saved: savedPlaces,
+      saving: savingPlace,
+    },
+    savePlace,
     online,
     queuedReadings,
     respondingToCheck,
