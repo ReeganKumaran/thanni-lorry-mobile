@@ -1,25 +1,40 @@
 /**
- * Walking routes from OSRM, the OpenStreetMap router.
+ * Walking routes.
  *
  * A planned route is what makes "off route" mean anything: without one the
- * backend can only watch for long stops. OSRM needs no API key and works from
- * the same OSM data as the map tiles, so the line drawn matches the streets
- * underneath it.
+ * backend can only watch for long stops.
  *
- * Two things about the public demo server, both measured rather than assumed:
- * it only hosts the car profile (a `/foot/` request came back at 7.95 m/s, which
- * is a car), and it snaps endpoints to the nearest routable road — a campus
- * address snapped 402 m away, ending the route nowhere near the destination.
+ * Two routers, in order of how well they describe a walk:
  *
- * So the result is sanity-checked and rejected when it clearly does not describe
- * the journey asked for. A straight line between the real endpoints is a more
- * honest planned route than a driving detour that ends in the wrong street, and
- * deviation still works against it.
+ * OpenRouteService has a real `foot-walking` profile — it routes along
+ * footways and crossings rather than roads, which is the difference between a
+ * usable line and a driving detour. It needs a free API key.
  *
- * The demo server is for development use, so this asks for one route per journey
- * and never polls.
- *   https://github.com/Project-OSRM/osrm-backend
+ * OSRM's public demo server needs no key, and is the fallback when no key is
+ * configured. Both of its problems were measured rather than assumed: it hosts
+ * only the car profile (a `/foot/` request came back at 7.95 m/s, which is a
+ * car), and it snaps endpoints to the nearest routable road — a campus address
+ * snapped 402 m away, ending the route nowhere near the destination.
+ *
+ * Whatever answers, the result is sanity-checked and rejected when it plainly
+ * does not describe the journey asked for. A straight line between the real
+ * endpoints is a more honest planned route than a detour ending in the wrong
+ * street, and deviation still works against it.
+ *
+ * One route per journey, never polled — both services are rate-limited and a
+ * planned route does not change while you walk it.
  */
+
+import Constants from "expo-constants";
+
+const ORS = "https://api.openrouteservice.org";
+
+/**
+ * `foot-walking` follows footways and crossings. ORS also offers `wheelchair`,
+ * which weights kerbs, inclines and surface — a different traveller, and worth
+ * exposing as a preference rather than assuming.
+ */
+const ORS_PROFILE = "foot-walking";
 
 const OSRM = "https://router.project-osrm.org";
 const USER_AGENT = "AURA-Safety-Companion/0.1 (accessibility journey monitor)";
@@ -83,12 +98,87 @@ export function directRoute(
   };
 }
 
+/** Free tier, from EXPO_PUBLIC_ORS_API_KEY or expo config extra. */
+function orsApiKey(): string | null {
+  const fromEnv = process.env.EXPO_PUBLIC_ORS_API_KEY;
+  const extra = Constants.expoConfig?.extra as { orsApiKey?: unknown } | undefined;
+  const raw = typeof fromEnv === "string" && fromEnv.trim() ? fromEnv : extra?.orsApiKey;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+/** True when a real pedestrian profile is available rather than the car fallback. */
+export function hasPedestrianRouting(): boolean {
+  return orsApiKey() !== null;
+}
+
+type OrsResponse = {
+  features?: {
+    geometry?: { coordinates?: [number, number][] };
+    properties?: { summary?: { distance?: number; duration?: number } };
+  }[];
+};
+
+/** OpenRouteService, walking profile. Returns null so the caller can fall back. */
+async function fetchFromOrs(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number },
+): Promise<PlannedRoute | null> {
+  const key = orsApiKey();
+  if (!key) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${ORS}/v2/directions/${ORS_PROFILE}/geojson`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: key,
+        "Content-Type": "application/json",
+        Accept: "application/geo+json",
+      },
+      body: JSON.stringify({
+        coordinates: [
+          [from.longitude, from.latitude],
+          [to.longitude, to.latitude],
+        ],
+      }),
+    });
+    if (!res.ok) return null;
+
+    const body = (await res.json()) as OrsResponse;
+    const feature = body.features?.[0];
+    const coordinates = feature?.geometry?.coordinates;
+    if (!coordinates || coordinates.length < 2) return null;
+
+    const summary = feature?.properties?.summary;
+    const distanceMeters = Math.round(summary?.distance ?? 0);
+
+    // ORS routes door-to-door rather than snapping to a road, so the detour
+    // guard is the only one that applies here.
+    const direct = straightLineMeters(from, to);
+    if (direct > 100 && distanceMeters > direct * MAX_DETOUR_RATIO) return null;
+
+    return {
+      coordinates: coordinates as RoutePoint[],
+      distanceMeters,
+      durationSeconds: Math.round(
+        summary?.duration ?? distanceMeters / WALKING_SPEED_MPS,
+      ),
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Walking route between two points. Returns null rather than throwing: a
  * journey without a route is still monitored for inactivity, so a router
  * outage must not stop the traveller setting off.
  */
-export async function fetchWalkingRoute(
+async function fetchFromOsrm(
   from: { latitude: number; longitude: number },
   to: { latitude: number; longitude: number },
 ): Promise<PlannedRoute | null> {
@@ -141,4 +231,18 @@ export async function fetchWalkingRoute(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Best available walking route between two points.
+ *
+ * Tries the pedestrian router first and falls back to the car-profile one, so
+ * the app still plans a route before anyone has configured a key. Returns null
+ * when neither describes the journey; the caller draws a direct line instead.
+ */
+export async function fetchWalkingRoute(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number },
+): Promise<PlannedRoute | null> {
+  return (await fetchFromOrs(from, to)) ?? (await fetchFromOsrm(from, to));
 }
