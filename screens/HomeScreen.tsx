@@ -16,7 +16,8 @@ import { PlacePickerModal } from "../components/PlacePickerModal";
 import { VoiceButton } from "../components/VoiceButton";
 import { colors, fontSize, fontWeight, radius, space, touchTarget } from "../constants/theme";
 import { checkHealth } from "../services/api";
-import { getApiOrigin, setApiOrigin } from "../services/config";
+import { checkEdgeHealth } from "../services/perception";
+import { getApiOrigin, getEdgeOrigin, setApiOrigin } from "../services/config";
 import type { PlaceState } from "../hooks/useJourneyMonitor";
 import { useVoiceControl } from "../hooks/useVoiceControl";
 
@@ -63,10 +64,18 @@ export function HomeScreen({
   const [showBackend, setShowBackend] = useState(false);
   const [host, setHost] = useState(getApiOrigin());
   const [backendState, setBackendState] = useState<BackendState>("unknown");
+  const [edgeState, setEdgeState] = useState<BackendState>("unknown");
 
   const probe = useCallback(async () => {
     setBackendState("checking");
-    setBackendState((await checkHealth()) ? "reachable" : "unreachable");
+    setEdgeState("checking");
+    // Both, before a journey starts. The edge node used to be discovered only
+    // when a frame failed mid-walk, which is the worst moment to learn the
+    // host is wrong — and the traveller this is built for cannot see the
+    // camera strip go quiet.
+    const [api, edge] = await Promise.all([checkHealth(), checkEdgeHealth()]);
+    setBackendState(api ? "reachable" : "unreachable");
+    setEdgeState(edge ? "reachable" : "unreachable");
   }, []);
 
   useEffect(() => {
@@ -200,11 +209,28 @@ export function HomeScreen({
             <Text style={styles.backendToggle}>{showBackend ? "Hide" : "Change"}</Text>
           </Pressable>
 
+          {/* The camera's hazard detection runs on a separate service, so it
+              can be down while the backend is fine. Shown here rather than
+              discovered when a frame fails. */}
+          <View
+            accessible
+            accessibilityLabel={`${edgeLabel(edgeState)}. ${getEdgeOrigin()}`}
+            style={styles.backendSummary}
+          >
+            <View style={[styles.dot, { backgroundColor: backendColor(edgeState) }]} />
+            <Text style={styles.backendText} numberOfLines={1}>
+              {edgeLabel(edgeState)} · {getEdgeOrigin()}
+            </Text>
+          </View>
+
           {showBackend ? (
             <View style={styles.backendForm}>
               <Text style={styles.backendHint}>
-                The phone cannot see the laptop&apos;s localhost. Enter the LAN address
-                the backend is serving on.
+                Over USB, leave this as localhost and run{" "}
+                <Text style={styles.backendCode}>adb reverse</Text>. Over Wi-Fi the
+                phone cannot see the laptop&apos;s localhost, so enter its LAN
+                address. The camera&apos;s hazard node follows the same host on its
+                own port.
               </Text>
               <TextInput
                 accessibilityLabel="Backend host"
@@ -242,6 +268,19 @@ function backendLabel(state: BackendState): string {
       return "Checking backend";
     default:
       return "Backend";
+  }
+}
+
+function edgeLabel(state: BackendState): string {
+  switch (state) {
+    case "reachable":
+      return "Hazard camera connected";
+    case "unreachable":
+      return "Hazard camera unreachable";
+    case "checking":
+      return "Checking hazard camera";
+    default:
+      return "Hazard camera";
   }
 }
 
@@ -374,5 +413,9 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: fontSize.meta,
     lineHeight: 19,
+  },
+  backendCode: {
+    color: colors.text,
+    fontWeight: fontWeight.medium,
   },
 });
