@@ -71,6 +71,21 @@ export type ProcessFrameResult = {
   throttled: boolean;
   /** Perceptually identical to a recent frame, so no model ran. */
   duplicate: boolean;
+  /** A model actually ran on this frame. */
+  inspected?: boolean;
+  /** Inspected, and nothing the node can recognise is in the way. */
+  clear?: boolean;
+  /** This frame bypassed the schedule because the traveller asked. */
+  on_demand?: boolean;
+  /**
+   * One short sentence, written by the node, ready to speak as-is.
+   *
+   * The wording lives where the taxonomy lives so both clients say the same
+   * thing — and so the negative stays honest: the node says "nothing I can
+   * recognise is in your way", never "the path is clear", because it cannot
+   * see kerbs, steps or open manholes.
+   */
+  summary?: string;
   sequence?: number | null;
   processing_ms: number;
   cadence?: EdgeCadence | null;
@@ -97,6 +112,26 @@ export function outcomeOf(result: ProcessFrameResult): FrameOutcome {
   return "clear";
 }
 
+/**
+ * What to say. The node's own sentence wins whenever it sent one — that is the
+ * single place the wording is allowed to live. The fallbacks only cover an
+ * older node that predates `summary`.
+ */
+export function spokenFor(result: ProcessFrameResult, outcome: FrameOutcome): string {
+  const summary = result.summary?.trim();
+  if (summary) return summary;
+  switch (outcome) {
+    case "clear":
+      return "I checked. Nothing I can recognise is in your way.";
+    case "unchanged":
+      return "Nothing has changed since I last looked.";
+    case "not-sampled":
+      return "I couldn't look just then. Try again in a moment.";
+    default:
+      return "";
+  }
+}
+
 export class EdgeError extends Error {
   readonly status: number;
 
@@ -105,22 +140,6 @@ export class EdgeError extends Error {
     this.name = "EdgeError";
     this.status = status;
   }
-}
-
-/**
- * Session key for a deliberate, user-requested scan.
- *
- * The node keys its rate limiter and its perceptual de-duplicator on this, so a
- * scan under its own key is never swallowed as "too soon" or "same as the last
- * one" by the passive stream — which at 0.2 FPS while standing still is exactly
- * what was happening. Someone who stops and aims the phone is asking a
- * question, and a question deserves an answer rather than a dropped frame.
- *
- * When the edge exposes an explicit scan-now bypass this becomes that flag
- * instead; the client change is this one function.
- */
-export function scanSessionKey(journeyId: string): string {
-  return `${journeyId}:scan`;
 }
 
 export type FrameUpload = {
@@ -134,8 +153,14 @@ export type FrameUpload = {
   sequence: number;
   width?: number | null;
   height?: number | null;
-  /** Overrides the node's per-journey session. See scanSessionKey. */
-  sessionKey?: string;
+  /**
+   * The traveller asked, rather than the schedule coming round.
+   *
+   * Bypasses the node's cadence limiter and its repeat-suppression window, so
+   * stopping and aiming the phone always gets an answer. Standing still used
+   * to be exactly when the node looked least.
+   */
+  scanNow?: boolean;
 };
 
 /**
@@ -159,7 +184,7 @@ export async function processFrame(frame: FrameUpload): Promise<ProcessFrameResu
   body.append("safety_state", frame.safetyState);
   if (frame.width) body.append("width", String(frame.width));
   if (frame.height) body.append("height", String(frame.height));
-  if (frame.sessionKey) body.append("session_key", frame.sessionKey);
+  if (frame.scanNow) body.append("scan_now", "true");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FRAME_TIMEOUT_MS);

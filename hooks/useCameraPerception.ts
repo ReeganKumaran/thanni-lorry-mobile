@@ -19,8 +19,8 @@ import { AccessibilityInfo, AppState } from "react-native";
 import type { AppStateStatus } from "react-native";
 import type { CameraView } from "expo-camera";
 
-import { EdgeError, outcomeOf, processFrame, scanSessionKey } from "../services/perception";
-import type { EdgeHazard, FrameOutcome, ProcessFrameResult } from "../services/perception";
+import { EdgeError, outcomeOf, processFrame, spokenFor } from "../services/perception";
+import type { EdgeHazard, ProcessFrameResult } from "../services/perception";
 import { speak } from "../services/speech";
 import { tapFeedback } from "../services/haptics";
 
@@ -93,20 +93,6 @@ export type PerceptionPhase =
   | "waiting-for-camera"
   | "running"
   | "edge-unreachable";
-
-/**
- * What the traveller is told after a frame.
- *
- * Silence is the wrong answer to "is anything in front of me?" — for someone
- * who cannot see, no answer and a broken app are the same experience. Every
- * one of these is spoken when the scan was asked for.
- */
-const SCAN_REPLY: Record<FrameOutcome, string> = {
-  hazard: "",
-  clear: "I looked. No broken pavement ahead.",
-  unchanged: "Nothing has changed since I last looked.",
-  "not-sampled": "I couldn't look just then. Try again in a moment.",
-};
 
 export type CameraPerception = {
   /** Attach to the CameraView. */
@@ -310,7 +296,7 @@ export function useCameraPerception({
    * takePictureAsync does not tolerate being re-entered.
    */
   const captureAndSend = useCallback(
-    async (id: string, sessionKey?: string): Promise<ProcessFrameResult | null> => {
+    async (id: string, scanNow = false): Promise<ProcessFrameResult | null> => {
       if (captureRef.current) return null;
       captureRef.current = true;
       try {
@@ -332,7 +318,7 @@ export function useCameraPerception({
           sequence: sequenceRef.current,
           width: photo.width,
           height: photo.height,
-          sessionKey,
+          scanNow,
         });
       } finally {
         captureRef.current = false;
@@ -358,7 +344,9 @@ export function useCameraPerception({
       tapFeedback();
       try {
         scanSequenceRef.current += 1;
-        const result = await captureAndSend(journeyId, scanSessionKey(journeyId));
+        // scan_now bypasses the node's cadence limiter and its repeat window,
+        // so a question always gets an answer.
+        const result = await captureAndSend(journeyId, true);
         if (!result) {
           speak("I couldn't use the camera just then.", "requested");
           return;
@@ -377,7 +365,10 @@ export function useCameraPerception({
           return;
         }
 
-        const reply = SCAN_REPLY[outcome];
+        // The node writes this sentence, including the negative — it says
+        // "nothing I can recognise is in your way", never "the path is clear",
+        // because it cannot see kerbs, steps or open manholes.
+        const reply = spokenFor(result, outcome);
         speak(reply, "requested");
         AccessibilityInfo.announceForAccessibility(reply);
         setLastHazardSpoken(reply);

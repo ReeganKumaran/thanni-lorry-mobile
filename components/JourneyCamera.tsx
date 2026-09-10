@@ -152,6 +152,10 @@ export function CheckPathButton({ perception }: Props) {
 function describeTier(mode: string | null, fps: number | null): string {
   const rate = fps ? ` · ${fps}/s` : "";
   switch (mode) {
+    case "inspection":
+      // Stopped, but the scene is still changing — the node reads that as
+      // someone deliberately looking at something, and samples faster.
+      return `Looking closely${rate}`;
     case "stationary":
       return `Idle while you're still${rate}`;
     case "walking":
@@ -182,16 +186,16 @@ function describePhase(perception: CameraPerception): string {
 }
 
 /**
- * "No broken pavement seen so far" and not "nothing on the path": the second
- * claims the path is clear, which this cannot know. Kerbs, stairs, open
- * manholes, raised paving and missing tactile paving are detected by nothing
- * wired in — the hazards most likely to actually hurt someone.
+ * "Nothing recognised" and not "the path is clear": the second is a claim this
+ * cannot make. Kerbs, stairs, open manholes, raised paving and missing tactile
+ * paving are detected by nothing wired in — the hazards most likely to actually
+ * hurt someone. The node's own wording draws the same line.
  */
 function describeDetail(perception: CameraPerception): string {
   return (
     perception.error ??
     perception.lastHazardSpoken ??
-    "No broken pavement seen so far."
+    "Nothing recognised in your way so far."
   );
 }
 
