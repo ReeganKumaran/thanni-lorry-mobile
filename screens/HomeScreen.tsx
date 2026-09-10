@@ -184,7 +184,9 @@ export function HomeScreen({
         <View style={styles.backend}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Backend ${backendLabel(backendState)}. ${getApiOrigin()}`}
+            // backendLabel already begins with "Backend", so prefixing it made
+            // a screen reader say "Backend Backend connected".
+            accessibilityLabel={`${backendLabel(backendState)}. ${getApiOrigin()}`}
             accessibilityHint="Opens the backend host setting."
             onPress={() => setShowBackend((open) => !open)}
             style={styles.backendSummary}
