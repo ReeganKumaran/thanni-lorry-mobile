@@ -79,8 +79,16 @@ export function SafetyCheckModal({ visible, check, busy, onRespond }: Props) {
     onRespond(response);
   };
 
-  const reason = check?.reason?.trim();
-  const prompt = check?.message?.trim() || "Are you safe?";
+  // The engine builds two strings. `prompt_message` is the plain-language one
+  // ("You're 198 m away from your route and you've been stopped for 2
+  // minutes"); `trigger_reason` is its own bookkeeping ("Multi-factor
+  // deviation and inactivity detected."). The traveller must read the first.
+  // CLAUDE.md rule 7 and AURA_DESIGN.md section 12 both say so, and this
+  // preferred the wrong one — on the device the takeover said "Multi-factor
+  // deviation and inactivity detected." with no explanation of what happened.
+  // The heading already asks the question, so drop it from the body.
+  const explanation =
+    check?.message?.trim().replace(/^are you safe\?\s*/i, "").trim() || "";
 
   return (
     <Modal
@@ -97,7 +105,9 @@ export function SafetyCheckModal({ visible, check, busy, onRespond }: Props) {
             Are you safe?
           </Text>
 
-          <Text style={styles.reason}>{reason || prompt}</Text>
+          <Text style={styles.reason}>
+            {explanation || "Something about your journey looks unusual."}
+          </Text>
 
           {secondsLeft !== null ? (
             <Text

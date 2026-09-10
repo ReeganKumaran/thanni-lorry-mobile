@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AccessibilityInfo } from "react-native";
 
 import { DEFAULT_PLACE_SIZE, metersForSize } from "../types/api";
 import { directRoute, fetchWalkingRoute } from "../services/routing";
@@ -35,6 +36,7 @@ import {
   getCurrentPosition,
   requestLocationPermission,
 } from "../services/location";
+import { activatedFeedback } from "../services/haptics";
 import { presentSafetyState } from "../constants/safety";
 import { speak, speakUrgent } from "../services/speech";
 
@@ -118,7 +120,14 @@ export type JourneyMonitor = {
   respondingToCheck: boolean;
   start: (destination: string) => Promise<void>;
   stop: () => Promise<void>;
-  respond: (response: CheckinResponse) => Promise<void>;
+  /**
+   * Answer an outstanding check, or raise an SOS outright.
+   *
+   * `silent` suppresses the spoken confirmation for the covert panic gesture,
+   * which exists precisely for when being heard is the danger. A haptic burst
+   * takes its place so the traveller still knows it landed.
+   */
+  respond: (response: CheckinResponse, options?: { silent?: boolean }) => Promise<void>;
   dismissError: () => void;
 };
 
@@ -207,6 +216,11 @@ export function useJourneyMonitor(): JourneyMonitor {
     } else {
       speak(`${presentation.headline} ${presentation.detail}`, "navigation");
     }
+    // expo-speech is a separate pipeline from the screen reader — it can be
+    // muted on its own, and it reaches nobody on a braille display. A change
+    // of safety state is the one thing that must never be missed, so it goes
+    // out on both channels.
+    AccessibilityInfo.announceForAccessibility(presentation.headline);
 
     if (next !== "CHECKING") setPendingCheck(null);
   }, []);
@@ -398,7 +412,8 @@ export function useJourneyMonitor(): JourneyMonitor {
     setError(null);
   }, []);
 
-  const respond = useCallback(async (response: CheckinResponse) => {
+  const respond = useCallback(
+    async (response: CheckinResponse, options?: { silent?: boolean }) => {
     const journeyId = journeyIdRef.current;
     if (!journeyId) return;
 
@@ -409,11 +424,18 @@ export function useJourneyMonitor(): JourneyMonitor {
       setPendingCheck(null);
       safetyStateRef.current = result.new_safety_state;
       setSafetyState(result.new_safety_state);
-      speakUrgent(
-        response === "HELP"
-          ? "I'm here. I'm notifying your trusted contact now."
-          : "Okay. I'll keep monitoring your journey.",
-      );
+      if (options?.silent) {
+        // The covert gesture must not announce itself: saying "I'm notifying
+        // your trusted contact now" out loud is exactly the outcome it was
+        // built to avoid. A haptic burst confirms it without being overheard.
+        activatedFeedback();
+      } else {
+        speakUrgent(
+          response === "HELP"
+            ? "I'm here. I'm notifying your trusted contact now."
+            : "Okay. I'll keep monitoring your journey.",
+        );
+      }
     } catch (err) {
       if (!mountedRef.current) return;
       setError(
@@ -422,7 +444,9 @@ export function useJourneyMonitor(): JourneyMonitor {
     } finally {
       if (mountedRef.current) setRespondingToCheck(false);
     }
-  }, []);
+    },
+    [],
+  );
 
   // Poll the backend for safety state. Location responses carry it too, but a
   // check-in can be raised by the agent between GPS fixes.

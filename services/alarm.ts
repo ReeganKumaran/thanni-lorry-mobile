@@ -57,6 +57,18 @@ export function isAlarmAvailable(): boolean {
   return loadExpoAv() !== null;
 }
 
+/**
+ * Loading the tone needs `expo-file-system` installed, even though nothing here
+ * imports it. `Audio.Sound.createAsync(require(...))` resolves the bundled wav
+ * through expo-asset, whose native `downloadAsync` asks the legacy module
+ * registry for write permission on the cache directory — and the only package
+ * that registers that permission module is expo-file-system. Without it the
+ * call rejects, `ensureLoaded` returns null, and the catch below turns the
+ * whole thing into silence: the hold reaches its third second, the button goes
+ * dark red, the phone buzzes, and no alarm ever sounds. That is exactly what
+ * this app did on a real device until expo-file-system was added, and nothing
+ * anywhere reported it. Do not drop that dependency.
+ */
 async function ensureLoaded(): Promise<LoadedSound | null> {
   if (sound) return sound;
   if (loading) return null;

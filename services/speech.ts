@@ -9,9 +9,24 @@
 
 import * as Speech from "expo-speech";
 
-export type AudioPriority = "hazard" | "navigation" | "environment" | "requested";
+/**
+ * `safety` sits above `hazard` on purpose. AURA_DESIGN.md section 32 orders the
+ * environment ladder — hazard beats navigation beats environment — but the
+ * safety conversation itself is not part of that ladder: "Are you safe?" and
+ * "I'm notifying your trusted contact now" must never be talked over by a
+ * remark about the pavement. Before the camera existed, `hazard` was only ever
+ * produced by the app's own sequential safety logic so the two could not
+ * collide; now that perception speaks too, they need separate ranks.
+ */
+export type AudioPriority =
+  | "safety"
+  | "hazard"
+  | "navigation"
+  | "environment"
+  | "requested";
 
 const RANK: Record<AudioPriority, number> = {
+  safety: 5,
   hazard: 4,
   navigation: 3,
   environment: 2,
@@ -47,11 +62,13 @@ export function speak(text: string, priority: AudioPriority = "environment"): vo
   const previous = lastSpokenAt.get(text);
   if (previous !== undefined && now - previous < REPEAT_SUPPRESSION_MS) return;
 
-  // Something more urgent is already being said.
-  if (speakingPriority !== null && RANK[priority] < RANK[speakingPriority]) return;
-
-  // Something less urgent is being said and this outranks it.
-  if (speakingPriority !== null && RANK[priority] > RANK[speakingPriority]) {
+  if (speakingPriority !== null) {
+    // Something more urgent is already being said.
+    if (RANK[priority] < RANK[speakingPriority]) return;
+    // Equal or higher: take the floor. Equal used to fall through and start a
+    // second utterance without stopping the first, which left the platform to
+    // decide whether to queue, overlap or truncate — not a choice worth
+    // leaving to chance between two safety lines.
     void Speech.stop();
   }
 
@@ -72,10 +89,13 @@ export function speak(text: string, priority: AudioPriority = "environment"): vo
   });
 }
 
-/** Say something even if it was just said — used when a check-in is re-prompted. */
+/**
+ * The safety conversation: check-ins, SOS confirmations, the hold prompt.
+ * Said even if it was just said, and outranks everything else.
+ */
 export function speakUrgent(text: string): void {
   lastSpokenAt.delete(text);
-  speak(text, "hazard");
+  speak(text, "safety");
 }
 
 export function stopSpeaking(): void {

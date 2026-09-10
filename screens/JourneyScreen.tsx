@@ -1,13 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { ConnectionBadge } from "../components/ConnectionBadge";
 import { HoldButton } from "../components/HoldButton";
-import { isPanicGestureSupported, subscribeToPanicKeys } from "../services/panicKeys";
+import { CheckPathButton, JourneyCamera } from "../components/JourneyCamera";
+import {
+  PANIC_GESTURE_HINT,
+  isPanicGestureSupported,
+  subscribeToPanicKeys,
+} from "../services/panicKeys";
 import { JourneyMap } from "../components/JourneyMap";
 import { JourneyStats } from "../components/JourneyStats";
 import { PlacePanel } from "../components/PlacePanel";
-import { PerceptionPanel } from "../components/PerceptionPanel";
 import { PlacePickerModal } from "../components/PlacePickerModal";
 import { VoiceButton } from "../components/VoiceButton";
 import { TelemetryPanel } from "../components/TelemetryPanel";
@@ -20,9 +24,8 @@ import {
   space,
   touchTarget,
 } from "../constants/theme";
-import type { CameraView } from "expo-camera";
 import type { JourneyMonitor } from "../hooks/useJourneyMonitor";
-import { usePerception } from "../hooks/usePerception";
+import { useCameraPerception } from "../hooks/useCameraPerception";
 import { useVoiceControl } from "../hooks/useVoiceControl";
 
 type Props = {
@@ -62,11 +65,11 @@ export function JourneyScreen({ monitor }: Props) {
   // tap rather than a dialog, which would be its own thing to dismiss.
   const [confirmEnd, setConfirmEnd] = useState(false);
 
-  // Both volume keys held together raises the same SOS, silently. The
+  // Volume down five times quickly raises the same SOS, silently. The
   // on-screen hold sounds an alarm on purpose; this is the path for when being
   // heard is itself the danger.
   useEffect(() => {
-    return subscribeToPanicKeys(() => respond("HELP"));
+    return subscribeToPanicKeys(() => respond("HELP", { silent: true }));
   }, [respond]);
 
   useEffect(() => {
@@ -82,15 +85,6 @@ export function JourneyScreen({ monitor }: Props) {
   const headline = place.paused ? `At ${place.current}` : presentation.headline;
   const statusColor = place.paused ? colors.statusSafe : presentation.color;
 
-  const cameraRef = useRef<CameraView | null>(null);
-  const perception = usePerception({
-    cameraRef,
-    journeyId: journey?.id ?? null,
-    speedMps: lastReading?.speed_mps ?? 0,
-    safetyState,
-    enabled: journey !== null,
-  });
-
   // "Where am I?" — one sentence, per AURA_DESIGN.md section 31.
   const describeLocation = () => {
     if (place.current) return `You're at ${place.current}.`;
@@ -102,12 +96,26 @@ export function JourneyScreen({ monitor }: Props) {
     return `You're on route to ${destinationName}.`;
   };
 
+  // The camera is the last leg of the perception chain: frames go to the edge
+  // node, the node's events reach the console over SSE, and what it finds on
+  // the ground is spoken here. Speed and safety state are passed through as
+  // readings — the node decides the sampling rate and what the hazard is.
+  // Declared before the voice control, which needs its scan.
+  const perception = useCameraPerception({
+    journeyId: journey?.id ?? null,
+    speedMps: lastReading?.speed_mps ?? 0,
+    safetyState,
+    // A full-screen safety check is not the moment to be told about pavement.
+    enabled: safetyState !== "CHECKING",
+  });
+
   const voice = useVoiceControl({
     onSafe: () => respond("SAFE"),
     onHelp: () => respond("HELP"),
     onStop: () => void stop(),
-    onLookAhead: perception.scanNow,
     describeLocation,
+    // "What's in front of me?" — the same look the button does.
+    onScan: perception.scanNow,
   });
 
   const mapLatitude = lastReading?.latitude ?? journey?.origin.latitude ?? 13.0827;
@@ -176,6 +184,12 @@ export function JourneyScreen({ monitor }: Props) {
 
         <JourneyStats fix={fix} accuracyMeters={lastReading?.accuracy ?? null} />
 
+        <JourneyCamera perception={perception} />
+
+        {/* Above the voice and SOS controls: this is the everyday question,
+            they are the exceptional ones. */}
+        <CheckPathButton perception={perception} />
+
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={showDetails ? "Hide journey details" : "Show journey details"}
@@ -194,16 +208,13 @@ export function JourneyScreen({ monitor }: Props) {
         </Pressable>
 
         {isPanicGestureSupported ? (
-          <Text style={styles.panicHint}>
-            Or hold both volume keys together — silent, no alarm.
-          </Text>
+          <Text style={styles.panicHint}>{PANIC_GESTURE_HINT}</Text>
         ) : null}
 
         {showDetails ? (
           <ScrollView style={styles.details} keyboardShouldPersistTaps="handled">
             <View style={styles.detailsInner}>
               {/* Actionable first; telemetry is reference material. */}
-              <PerceptionPanel ref={cameraRef} perception={perception} />
               <PlacePanel
                 place={place}
                 canSave={lastReading !== null}
@@ -232,7 +243,7 @@ export function JourneyScreen({ monitor }: Props) {
           holdingLabel="Keep holding"
           busy={respondingToCheck}
           onActivate={() => respond("HELP")}
-          accessibilityHint="Press and hold for five seconds to notify your trusted contact. An alarm sounds from three seconds."
+          accessibilityHint="Notifies your trusted contact."
         />
       </View>
 
@@ -332,7 +343,9 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.medium,
   },
   panicHint: {
-    color: colors.textMuted,
+    // Not textMuted: this line carries the whole instruction for raising a
+    // silent SOS, and #8A8A84 on the sheet is 3.5:1 — below AA for body text.
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
     textAlign: "center",
   },
