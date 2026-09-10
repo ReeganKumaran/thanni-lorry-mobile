@@ -109,19 +109,30 @@ export function listenOnce(
   };
 
   try {
+    // Listeners go on the native module itself, never through the package's
+    // `addSpeechRecognitionListener` re-export. That export is the JSI host
+    // method torn off its object (`export const addSpeechRecognitionListener =
+    // ExpoSpeechRecognitionModule.addListener`), so the receiver is whatever
+    // you happen to call it on. Called as `mod.addSpeechRecognitionListener(…)`
+    // it quietly subscribes to the module namespace object instead of the
+    // native emitter: registration succeeds, nothing throws, and not one event
+    // ever arrives — the app sits on "Listening…" for ever while the recognizer
+    // has already returned a transcript. Called bare it aborts the process
+    // outright ("jsi::Value::getObject: assertion isObject() failed").
+    // Both were reproduced on the device.
     subscriptions.push(
-      mod.addSpeechRecognitionListener("result", (event) => {
+      ExpoSpeechRecognitionModule.addListener("result", (event) => {
         const best = event.results?.[0]?.transcript ?? "";
         if (event.isFinal && best.trim()) finish(best.trim());
       }),
     );
     subscriptions.push(
-      mod.addSpeechRecognitionListener("error", (event) =>
+      ExpoSpeechRecognitionModule.addListener("error", (event) =>
         finish(null, describeError(event.error)),
       ),
     );
     subscriptions.push(
-      mod.addSpeechRecognitionListener("end", () => {
+      ExpoSpeechRecognitionModule.addListener("end", () => {
         // Ended without a final result: nothing was understood.
         if (!finished) finish(null, "I didn't catch that.");
       }),

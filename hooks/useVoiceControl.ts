@@ -55,26 +55,49 @@ export function useVoiceControl(handlers: VoiceHandlers): VoiceControl {
   const dispatch = useCallback(
     (intent: VoiceIntent) => {
       const h = handlersRef.current;
+
+      // Each screen supplies only the handlers it can honour: the home screen
+      // has no journey to escalate, the journey screen has no second one to
+      // start. Every branch checks before it speaks, because the answer is the
+      // only feedback a traveller who cannot see the screen gets. Announcing
+      // "I'm notifying your trusted contact" with nothing behind it is the
+      // worst thing AURA could say to someone who has just asked for help.
       switch (intent.kind) {
         case "help":
+          if (!h.onHelp) {
+            say("I can't call for help until a journey is running. Say: take me to home.");
+            return;
+          }
           activatedFeedback();
           say("I'm here. I'm notifying your trusted contact now.");
-          h.onHelp?.();
+          h.onHelp();
           return;
         case "safe":
+          if (!h.onSafe) {
+            say("Nothing is being monitored right now.");
+            return;
+          }
           say("Okay. I'll keep monitoring your journey.");
-          h.onSafe?.();
+          h.onSafe();
           return;
         case "where":
           say(h.describeLocation?.() ?? "I don't know where you are yet.");
           return;
         case "start":
+          if (!h.onStart) {
+            say("You're already on a journey. Say: stop the journey, to end it first.");
+            return;
+          }
           say(`Starting a monitored journey to ${intent.destination}.`);
-          h.onStart?.(intent.destination);
+          h.onStart(intent.destination);
           return;
         case "stop":
+          if (!h.onStop) {
+            say("There's no journey to stop.");
+            return;
+          }
           say("Okay. I've stopped monitoring.");
-          h.onStop?.();
+          h.onStop();
           return;
         case "repeat":
           speakUrgent(lastAnswerRef.current || "I haven't said anything yet.");
