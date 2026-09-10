@@ -22,6 +22,8 @@ export type VoiceHandlers = {
   onStop?: () => void;
   /** Should return a short spoken answer, per AURA_DESIGN.md section 31. */
   describeLocation?: () => string;
+  /** Look at the ground ahead now and say what is there. */
+  onScan?: () => void;
 };
 
 export type VoiceControl = {
@@ -142,6 +144,15 @@ export function useVoiceControl(handlers: VoiceHandlers): VoiceControl {
           return;
         case "where":
           say(h.describeLocation?.() ?? "I don't know where you are yet.");
+          return;
+        case "scan":
+          if (!h.onScan) {
+            say("I can only look at the path while a journey is running.");
+            return;
+          }
+          // The scan answers out loud itself, including when it finds nothing,
+          // so there is nothing to say here beyond starting it.
+          h.onScan();
           return;
         case "start":
           if (!h.onStart) {

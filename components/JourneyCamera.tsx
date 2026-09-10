@@ -115,20 +115,60 @@ export function JourneyCamera({ perception }: Props) {
 }
 
 /**
+ * "Check the path" — a deliberate look, on demand.
+ *
+ * Someone who stops and aims the phone is asking a question. Passive sampling
+ * drops to one frame every five seconds when they stand still, so without this
+ * the question went unanswered and the feature felt dead. It always replies,
+ * including when it finds nothing.
+ */
+export function CheckPathButton({ perception }: Props) {
+  return (
+    <AccessibleButton
+      label={perception.scanning ? "Looking…" : "Check the path"}
+      variant="secondary"
+      busy={perception.scanning}
+      onPress={perception.scanNow}
+      accessibilityHint="Looks at the ground ahead now and says what is there. Finds broken and cracked pavement; it cannot reliably see potholes, kerbs or steps."
+    />
+  );
+}
+
+/**
  * Say what is happening, never more than is true. "Watching for broken
  * pavement" is the whole claim: frames are going out and that is the one
  * surface hazard the model detects reliably. services/edge/HAZARD_MODEL.md
  * lists what nothing here detects — kerbs, stairs, open manholes, raised
  * paving, missing tactile paving — and this copy must not imply otherwise.
  */
+/**
+ * The node's own word for the tier it has chosen, in the traveller's language.
+ *
+ * A stationary journey samples once every five seconds, which on screen looked
+ * identical to a freeze and drove the "hazard detection is dead" report. Naming
+ * the tier makes an idle 0.2/s visibly idle — and tells the reader that
+ * standing still is exactly when to use Check the path.
+ */
+function describeTier(mode: string | null, fps: number | null): string {
+  const rate = fps ? ` · ${fps}/s` : "";
+  switch (mode) {
+    case "stationary":
+      return `Idle while you're still${rate}`;
+    case "walking":
+      return `Watching as you walk${rate}`;
+    case "alert":
+      return `Checking closely${rate}`;
+    default:
+      return rate ? `Watching${rate}` : "Watching";
+  }
+}
+
 function describePhase(perception: CameraPerception): string {
   switch (perception.phase) {
     case "running": {
-      const rate = perception.cadenceFps;
+      if (perception.scanning) return "Looking now…";
       const frames = `${perception.framesSent} frame${perception.framesSent === 1 ? "" : "s"}`;
-      return rate
-        ? `Watching for broken pavement · ${frames} · ${rate}/s`
-        : `Watching for broken pavement · ${frames}`;
+      return `${describeTier(perception.cadenceMode, perception.cadenceFps)} · ${frames}`;
     }
     case "edge-unreachable":
       return "Not watching for broken pavement";

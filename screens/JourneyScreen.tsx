@@ -3,7 +3,7 @@ import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from "react
 
 import { ConnectionBadge } from "../components/ConnectionBadge";
 import { HoldButton } from "../components/HoldButton";
-import { JourneyCamera } from "../components/JourneyCamera";
+import { CheckPathButton, JourneyCamera } from "../components/JourneyCamera";
 import {
   PANIC_GESTURE_HINT,
   isPanicGestureSupported,
@@ -96,23 +96,26 @@ export function JourneyScreen({ monitor }: Props) {
     return `You're on route to ${destinationName}.`;
   };
 
-  const voice = useVoiceControl({
-    onSafe: () => respond("SAFE"),
-    onHelp: () => respond("HELP"),
-    onStop: () => void stop(),
-    describeLocation,
-  });
-
   // The camera is the last leg of the perception chain: frames go to the edge
   // node, the node's events reach the console over SSE, and what it finds on
   // the ground is spoken here. Speed and safety state are passed through as
   // readings — the node decides the sampling rate and what the hazard is.
+  // Declared before the voice control, which needs its scan.
   const perception = useCameraPerception({
     journeyId: journey?.id ?? null,
     speedMps: lastReading?.speed_mps ?? 0,
     safetyState,
     // A full-screen safety check is not the moment to be told about pavement.
     enabled: safetyState !== "CHECKING",
+  });
+
+  const voice = useVoiceControl({
+    onSafe: () => respond("SAFE"),
+    onHelp: () => respond("HELP"),
+    onStop: () => void stop(),
+    describeLocation,
+    // "What's in front of me?" — the same look the button does.
+    onScan: perception.scanNow,
   });
 
   const mapLatitude = lastReading?.latitude ?? journey?.origin.latitude ?? 13.0827;
@@ -182,6 +185,10 @@ export function JourneyScreen({ monitor }: Props) {
         <JourneyStats fix={fix} accuracyMeters={lastReading?.accuracy ?? null} />
 
         <JourneyCamera perception={perception} />
+
+        {/* Above the voice and SOS controls: this is the everyday question,
+            they are the exceptional ones. */}
+        <CheckPathButton perception={perception} />
 
         <Pressable
           accessibilityRole="button"

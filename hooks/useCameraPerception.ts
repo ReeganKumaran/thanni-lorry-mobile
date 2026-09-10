@@ -19,9 +19,10 @@ import { AccessibilityInfo, AppState } from "react-native";
 import type { AppStateStatus } from "react-native";
 import type { CameraView } from "expo-camera";
 
-import { EdgeError, processFrame } from "../services/perception";
-import type { EdgeHazard } from "../services/perception";
+import { EdgeError, outcomeOf, processFrame, scanSessionKey } from "../services/perception";
+import type { EdgeHazard, FrameOutcome, ProcessFrameResult } from "../services/perception";
 import { speak } from "../services/speech";
+import { tapFeedback } from "../services/haptics";
 
 // ---------------------------------------------------------------------------
 // Cadence
@@ -77,12 +78,35 @@ const JPEG_QUALITY = 0.5;
  */
 const HAZARD_REANNOUNCE_MS = 45_000;
 
+/**
+ * How many clear frames in a row before saying the path is clear again.
+ *
+ * Only after a hazard has actually been announced — this is the "it has
+ * changed back" signal, not a running commentary. One clear frame is noise;
+ * three in a row is a change.
+ */
+const CLEAR_AGAIN_AFTER_FRAMES = 3;
+
 export type PerceptionPhase =
   | "idle"
   | "no-permission"
   | "waiting-for-camera"
   | "running"
   | "edge-unreachable";
+
+/**
+ * What the traveller is told after a frame.
+ *
+ * Silence is the wrong answer to "is anything in front of me?" — for someone
+ * who cannot see, no answer and a broken app are the same experience. Every
+ * one of these is spoken when the scan was asked for.
+ */
+const SCAN_REPLY: Record<FrameOutcome, string> = {
+  hazard: "",
+  clear: "I looked. No broken pavement ahead.",
+  unchanged: "Nothing has changed since I last looked.",
+  "not-sampled": "I couldn't look just then. Try again in a moment.",
+};
 
 export type CameraPerception = {
   /** Attach to the CameraView. */
@@ -101,6 +125,10 @@ export type CameraPerception = {
   cadenceMode: string | null;
   cadenceFps: number | null;
   error: string | null;
+  /** Look right now, because the traveller asked. */
+  scanNow: () => void;
+  /** True while an explicitly requested scan is in flight. */
+  scanning: boolean;
 };
 
 type Options = {
@@ -182,6 +210,7 @@ export function useCameraPerception({
   const [cadenceFps, setCadenceFps] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [foreground, setForeground] = useState(
     () => AppState.currentState === "active",
   );
@@ -195,6 +224,12 @@ export function useCameraPerception({
   const announcedRef = useRef<Map<string, number>>(new Map());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runningRef = useRef(false);
+  // One capture at a time: takePictureAsync does not like being re-entered,
+  // and a requested scan must not race the passive loop.
+  const captureRef = useRef(false);
+  const scanSequenceRef = useRef(0);
+  const clearRunRef = useRef(0);
+  const hazardAnnouncedRef = useRef(false);
 
   speedRef.current = speedMps;
   safetyStateRef.current = safetyState;
@@ -220,7 +255,11 @@ export function useCameraPerception({
     })();
   }, []);
 
-  const announce = useCallback((hazards: EdgeHazard[], safetyState: string) => {
+  const announce = useCallback((
+    hazards: EdgeHazard[],
+    safetyState: string,
+    requested = false,
+  ) => {
     // Worst first, decided by the node (services/edge/pipeline.py sorts on
     // severity, then proximity, then confidence). Taking the head means the
     // phone never ranks hazards itself, and says one thing rather than reading
@@ -247,9 +286,16 @@ export function useCameraPerception({
     const key = hazardKey(worst);
     const now = Date.now();
     const spokenAt = announcedRef.current.get(key);
-    if (spokenAt !== undefined && now - spokenAt < HAZARD_REANNOUNCE_MS) return;
+    // The anti-repeat window exists so a hazard that stays in frame is not read
+    // out over and over. It must not apply when the traveller has just asked —
+    // an unanswered question is the failure this whole affordance exists to fix.
+    if (!requested && spokenAt !== undefined && now - spokenAt < HAZARD_REANNOUNCE_MS) {
+      return;
+    }
 
     announcedRef.current.set(key, now);
+    hazardAnnouncedRef.current = true;
+    clearRunRef.current = 0;
     speak(sentence, "hazard");
     // The app's own text-to-speech is a separate pipeline from the screen
     // reader: it can be muted on its own, and it is no use at all to someone
@@ -257,6 +303,97 @@ export function useCameraPerception({
     AccessibilityInfo.announceForAccessibility(sentence);
     setLastHazardSpoken(sentence);
   }, []);
+
+  /**
+   * Take one frame and send it. Shared by the passive loop and by an explicit
+   * scan so the two cannot drift apart, and serialised because
+   * takePictureAsync does not tolerate being re-entered.
+   */
+  const captureAndSend = useCallback(
+    async (id: string, sessionKey?: string): Promise<ProcessFrameResult | null> => {
+      if (captureRef.current) return null;
+      captureRef.current = true;
+      try {
+        const photo = await cameraRef.current?.takePictureAsync({
+          quality: JPEG_QUALITY,
+          exif: false,
+          // The shutter animation is a flash of white on a screen someone may
+          // not be looking at, several times a minute.
+          shutterSound: false,
+        });
+        if (!photo?.uri) return null;
+
+        sequenceRef.current += 1;
+        return await processFrame({
+          uri: photo.uri,
+          journeyId: id,
+          speedMps: speedRef.current,
+          safetyState: safetyStateRef.current,
+          sequence: sequenceRef.current,
+          width: photo.width,
+          height: photo.height,
+          sessionKey,
+        });
+      } finally {
+        captureRef.current = false;
+      }
+    },
+    [],
+  );
+
+  /**
+   * Look now, because the traveller asked.
+   *
+   * Answered out loud whatever the outcome. A question that gets silence is
+   * indistinguishable from an app that has stopped working, and that is
+   * precisely what standing still and aiming the phone used to produce: at
+   * 0.2 FPS the next frame was up to five seconds away, and the one after it
+   * was dropped as a duplicate.
+   */
+  const scanNow = useCallback(() => {
+    if (!journeyId || scanning) return;
+
+    void (async () => {
+      setScanning(true);
+      tapFeedback();
+      try {
+        scanSequenceRef.current += 1;
+        const result = await captureAndSend(journeyId, scanSessionKey(journeyId));
+        if (!result) {
+          speak("I couldn't use the camera just then.", "requested");
+          return;
+        }
+
+        setFramesSent((n) => n + 1);
+        setError(null);
+        if (result.cadence) {
+          setCadenceMode(result.cadence.mode);
+          setCadenceFps(result.cadence.target_fps);
+        }
+
+        const outcome = outcomeOf(result);
+        if (outcome === "hazard") {
+          announce(result.hazards ?? [], safetyStateRef.current, true);
+          return;
+        }
+
+        const reply = SCAN_REPLY[outcome];
+        speak(reply, "requested");
+        AccessibilityInfo.announceForAccessibility(reply);
+        setLastHazardSpoken(reply);
+      } catch (err) {
+        const line =
+          err instanceof EdgeError
+            ? "I can't reach the hazard camera right now."
+            : "I couldn't check just then.";
+        speak(line, "requested");
+        AccessibilityInfo.announceForAccessibility(line);
+        setError(line);
+      } finally {
+        setScanning(false);
+      }
+    })();
+  }, [announce, captureAndSend, journeyId, scanning]);
 
   const shouldRun = Boolean(journeyId) && enabled && cameraReady && foreground;
 
@@ -282,30 +419,11 @@ export function useCameraPerception({
       );
 
       try {
-        const photo = await cameraRef.current?.takePictureAsync({
-          quality: JPEG_QUALITY,
-          exif: false,
-          // The shutter animation is a flash of white on a screen someone may
-          // not be looking at, several times a minute.
-          shutterSound: false,
-        });
+        const result = await captureAndSend(journeyId);
 
         if (!runningRef.current) return;
 
-        if (photo?.uri) {
-          sequenceRef.current += 1;
-          const result = await processFrame({
-            uri: photo.uri,
-            journeyId,
-            speedMps: speedRef.current,
-            safetyState: safetyStateRef.current,
-            sequence: sequenceRef.current,
-            width: photo.width,
-            height: photo.height,
-          });
-
-          if (!runningRef.current) return;
-
+        if (result) {
           setFramesSent((n) => n + 1);
           setError(null);
           setPhase("running");
@@ -315,7 +433,29 @@ export function useCameraPerception({
             setCadenceFps(result.cadence.target_fps);
             nextDelay = clampInterval(result.cadence.next_frame_after_ms);
           }
+
+          const outcome = outcomeOf(result);
           announce(result.hazards ?? [], safetyStateRef.current);
+
+          // Say it once when a hazard that WAS announced has gone. That is a
+          // change worth knowing about; a clear frame on its own is not.
+          if (outcome === "clear") {
+            clearRunRef.current += 1;
+            if (
+              hazardAnnouncedRef.current &&
+              clearRunRef.current >= CLEAR_AGAIN_AFTER_FRAMES &&
+              safetyStateRef.current === "SAFE"
+            ) {
+              hazardAnnouncedRef.current = false;
+              clearRunRef.current = 0;
+              const line = "The pavement ahead looks clear again.";
+              speak(line, "navigation");
+              AccessibilityInfo.announceForAccessibility(line);
+              setLastHazardSpoken(line);
+            }
+          } else if (outcome !== "unchanged") {
+            clearRunRef.current = 0;
+          }
         }
       } catch (err) {
         if (!runningRef.current) return;
@@ -351,7 +491,7 @@ export function useCameraPerception({
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = null;
     };
-  }, [shouldRun, journeyId, announce]);
+  }, [shouldRun, journeyId, announce, captureAndSend]);
 
   // A new journey is a new scene: nothing said about the last one should
   // suppress an announcement on this one.
@@ -364,6 +504,9 @@ export function useCameraPerception({
     setCadenceMode(null);
     setCadenceFps(null);
     setError(null);
+    clearRunRef.current = 0;
+    hazardAnnouncedRef.current = false;
+    scanSequenceRef.current = 0;
   }, [journeyId]);
 
   return {
@@ -377,5 +520,7 @@ export function useCameraPerception({
     cadenceMode,
     cadenceFps,
     error,
+    scanNow,
+    scanning,
   };
 }

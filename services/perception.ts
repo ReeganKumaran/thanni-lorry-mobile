@@ -65,8 +65,11 @@ export type EdgeForwardResult = {
 
 /** The subset of `ProcessFrameResponse` the app actually reads. */
 export type ProcessFrameResult = {
+  /** False when the node declined to run models on this frame. */
   accepted: boolean;
+  /** Rate-limited: the frame was NOT looked at. Not the same as "nothing found". */
   throttled: boolean;
+  /** Perceptually identical to a recent frame, so no model ran. */
   duplicate: boolean;
   sequence?: number | null;
   processing_ms: number;
@@ -76,6 +79,24 @@ export type ProcessFrameResult = {
   forwarded?: EdgeForwardResult | null;
 };
 
+/**
+ * What actually happened to a frame, in the three ways that matter to someone
+ * who cannot see the screen.
+ *
+ * "I looked and found nothing" and "I never looked" are completely different
+ * answers, and collapsing them into silence is why hazard detection felt dead:
+ * a stationary traveller is sampled once every five seconds and de-duplicated
+ * after that, so aiming at a hazard produced nothing at all.
+ */
+export type FrameOutcome = "hazard" | "clear" | "unchanged" | "not-sampled";
+
+export function outcomeOf(result: ProcessFrameResult): FrameOutcome {
+  if (result.hazards && result.hazards.length > 0) return "hazard";
+  if (result.throttled || !result.accepted) return "not-sampled";
+  if (result.duplicate) return "unchanged";
+  return "clear";
+}
+
 export class EdgeError extends Error {
   readonly status: number;
 
@@ -84,6 +105,22 @@ export class EdgeError extends Error {
     this.name = "EdgeError";
     this.status = status;
   }
+}
+
+/**
+ * Session key for a deliberate, user-requested scan.
+ *
+ * The node keys its rate limiter and its perceptual de-duplicator on this, so a
+ * scan under its own key is never swallowed as "too soon" or "same as the last
+ * one" by the passive stream — which at 0.2 FPS while standing still is exactly
+ * what was happening. Someone who stops and aims the phone is asking a
+ * question, and a question deserves an answer rather than a dropped frame.
+ *
+ * When the edge exposes an explicit scan-now bypass this becomes that flag
+ * instead; the client change is this one function.
+ */
+export function scanSessionKey(journeyId: string): string {
+  return `${journeyId}:scan`;
 }
 
 export type FrameUpload = {
@@ -97,6 +134,8 @@ export type FrameUpload = {
   sequence: number;
   width?: number | null;
   height?: number | null;
+  /** Overrides the node's per-journey session. See scanSessionKey. */
+  sessionKey?: string;
 };
 
 /**
@@ -120,6 +159,7 @@ export async function processFrame(frame: FrameUpload): Promise<ProcessFrameResu
   body.append("safety_state", frame.safetyState);
   if (frame.width) body.append("width", String(frame.width));
   if (frame.height) body.append("height", String(frame.height));
+  if (frame.sessionKey) body.append("session_key", frame.sessionKey);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FRAME_TIMEOUT_MS);

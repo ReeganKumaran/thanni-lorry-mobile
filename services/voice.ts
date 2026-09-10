@@ -17,6 +17,7 @@ export type VoiceIntent =
   | { kind: "safe" }
   | { kind: "help" }
   | { kind: "where" }
+  | { kind: "scan" }
   | { kind: "start"; destination: string }
   | { kind: "stop" }
   | { kind: "repeat" }
@@ -287,6 +288,18 @@ const PATTERNS: { kind: VoiceIntent["kind"]; tests: RegExp[] }[] = [
     tests: [/\bwhere am i\b/, /\bwhere are we\b/, /\bmy location\b/, /\bhow far\b/],
   },
   {
+    // "What is in front of me?" — a deliberate look, not a status question.
+    kind: "scan",
+    tests: [
+      /\bin front of me\b/,
+      /\bwhat(?:'s| is) ahead\b/,
+      /\bwhat do you see\b/,
+      /\b(?:is|are) (?:the )?(?:path|pavement|road|way) clear\b/,
+      /\b(?:check|scan|look at) (?:the )?(?:path|pavement|road|ground|way)\b/,
+      /\blook ahead\b/,
+    ],
+  },
+  {
     kind: "stop",
     tests: [/\b(?:stop|end|finish|cancel) (?:the )?(?:journey|trip|monitoring)\b/, /\bi(?:'ve| have)? arrived\b/],
   },
@@ -320,6 +333,10 @@ export const VOICE_BIASING_PHRASES: string[] = [
   "all good",
   "where am I",
   "how far",
+  "what is in front of me",
+  "what's ahead",
+  "is the path clear",
+  "check the path",
   "stop the journey",
   "end the journey",
   "I have arrived",
