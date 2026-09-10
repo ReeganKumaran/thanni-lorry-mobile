@@ -3,6 +3,7 @@ import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from "react
 
 import { ConnectionBadge } from "../components/ConnectionBadge";
 import { HoldButton } from "../components/HoldButton";
+import { isPanicGestureSupported, subscribeToPanicKeys } from "../services/panicKeys";
 import { JourneyMap } from "../components/JourneyMap";
 import { JourneyStats } from "../components/JourneyStats";
 import { PlacePanel } from "../components/PlacePanel";
@@ -55,6 +56,13 @@ export function JourneyScreen({ monitor }: Props) {
   // Ending a journey stops safety monitoring, so it asks once — but as a second
   // tap rather than a dialog, which would be its own thing to dismiss.
   const [confirmEnd, setConfirmEnd] = useState(false);
+
+  // Both volume keys held together raises the same SOS, silently. The
+  // on-screen hold sounds an alarm on purpose; this is the path for when being
+  // heard is itself the danger.
+  useEffect(() => {
+    return subscribeToPanicKeys(() => respond("HELP"));
+  }, [respond]);
 
   useEffect(() => {
     if (!confirmEnd) return;
@@ -151,6 +159,12 @@ export function JourneyScreen({ monitor }: Props) {
           </Text>
           <Text style={styles.detailsChevron}>{showDetails ? "Hide" : "Details"}</Text>
         </Pressable>
+
+        {isPanicGestureSupported ? (
+          <Text style={styles.panicHint}>
+            Or hold both volume keys together — silent, no alarm.
+          </Text>
+        ) : null}
 
         {showDetails ? (
           <ScrollView style={styles.details} keyboardShouldPersistTaps="handled">
@@ -276,6 +290,11 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: fontSize.body,
     fontWeight: fontWeight.medium,
+  },
+  panicHint: {
+    color: colors.textMuted,
+    fontSize: fontSize.meta,
+    textAlign: "center",
   },
   detailsChevron: {
     color: colors.statusInfo,

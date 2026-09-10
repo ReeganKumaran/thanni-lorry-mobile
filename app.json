@@ -54,7 +54,8 @@
         {
           "cameraPermission": "AURA uses the camera to describe obstacles and signage ahead of you."
         }
-      ]
+      ],
+      "./plugins/withPanicVolumeKeys"
     ]
   }
 }
