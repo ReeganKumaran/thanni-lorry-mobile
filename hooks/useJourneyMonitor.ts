@@ -145,6 +145,19 @@ function roughDistanceMeters(
 }
 
 /**
+ * Labels that mean "somewhere of mine", never a place on a map.
+ *
+ * OpenStreetMap has a town called Home in Pierce County, Washington. Geocoding
+ * the bare word planned a 22,000 km route from Chennai to it, and deviation was
+ * then measured against that line. A personal label with no saved place behind
+ * it has no coordinates, and guessing is worse than admitting so.
+ */
+const PERSONAL_LABELS = ["home", "work", "office", "college", "school", "station"];
+
+/** Nobody walks to another continent; a match this far away is the wrong match. */
+const MAX_PLAUSIBLE_DESTINATION_METERS = 100_000;
+
+/**
  * Turn what the traveller typed into coordinates.
  *
  * Their own saved places win: "Home" should mean their home, not the nearest
@@ -153,13 +166,25 @@ function roughDistanceMeters(
 async function resolveDestination(
   text: string,
   saved: KnownPlace[],
+  origin: { latitude: number; longitude: number },
 ): Promise<{ latitude: number; longitude: number } | null> {
-  const match = saved.find((p) => p.label.toLowerCase() === text.toLowerCase());
+  const wanted = text.trim().toLowerCase();
+
+  const match = saved.find((p) => p.label.toLowerCase() === wanted);
   if (match) return { latitude: match.latitude, longitude: match.longitude };
 
+  // A personal label nobody has saved yet: no route, rather than a wrong one.
+  if (PERSONAL_LABELS.includes(wanted)) return null;
+
   try {
-    const [first] = await searchPlaces(text);
-    return first ? { latitude: first.latitude, longitude: first.longitude } : null;
+    const results = await searchPlaces(text);
+    for (const candidate of results) {
+      const away = roughDistanceMeters(origin, candidate);
+      if (away <= MAX_PLAUSIBLE_DESTINATION_METERS) {
+        return { latitude: candidate.latitude, longitude: candidate.longitude };
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -287,7 +312,7 @@ export function useJourneyMonitor(): JourneyMonitor {
         // back to searching OpenStreetMap for the text the traveller typed.
         let route: RoutePoint[] = [];
         if (origin) {
-          const destination = await resolveDestination(trimmed, savedPlaces);
+          const destination = await resolveDestination(trimmed, savedPlaces, origin);
           if (destination) {
             // A straight line beats no route at all: deviation needs something
             // to measure against, and the router is often unusable here.
