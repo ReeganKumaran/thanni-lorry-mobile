@@ -8,6 +8,7 @@ import { JourneyMap } from "../components/JourneyMap";
 import { JourneyStats } from "../components/JourneyStats";
 import { PlacePanel } from "../components/PlacePanel";
 import { PlacePickerModal } from "../components/PlacePickerModal";
+import { VoiceButton } from "../components/VoiceButton";
 import { TelemetryPanel } from "../components/TelemetryPanel";
 import { presentSafetyState } from "../constants/safety";
 import {
@@ -19,6 +20,7 @@ import {
   touchTarget,
 } from "../constants/theme";
 import type { JourneyMonitor } from "../hooks/useJourneyMonitor";
+import { useVoiceControl } from "../hooks/useVoiceControl";
 
 type Props = {
   monitor: JourneyMonitor;
@@ -76,6 +78,24 @@ export function JourneyScreen({ monitor }: Props) {
   const presentation = presentSafetyState(safetyState);
   const headline = place.paused ? `At ${place.current}` : presentation.headline;
   const statusColor = place.paused ? colors.statusSafe : presentation.color;
+
+  // "Where am I?" — one sentence, per AURA_DESIGN.md section 31.
+  const describeLocation = () => {
+    if (place.current) return `You're at ${place.current}.`;
+    const destinationName = destination ?? "your destination";
+    if (!telemetry) return `You're on your way to ${destinationName}.`;
+    if (telemetry.deviationMeters >= 50) {
+      return `You're about ${Math.round(telemetry.deviationMeters)} metres off your route to ${destinationName}.`;
+    }
+    return `You're on route to ${destinationName}.`;
+  };
+
+  const voice = useVoiceControl({
+    onSafe: () => respond("SAFE"),
+    onHelp: () => respond("HELP"),
+    onStop: () => void stop(),
+    describeLocation,
+  });
 
   const mapLatitude = lastReading?.latitude ?? journey?.origin.latitude ?? 13.0827;
   const mapLongitude = lastReading?.longitude ?? journey?.origin.longitude ?? 80.2707;
@@ -187,6 +207,12 @@ export function JourneyScreen({ monitor }: Props) {
 
         {/* Held, not tapped: this notifies a trusted contact and opens an
             incident, and there is no quiet undo. */}
+        <VoiceButton
+          listening={voice.listening}
+          onPress={voice.listen}
+          lastHeard={voice.lastHeard}
+        />
+
         <HoldButton
           label="I need help"
           holdingLabel="Keep holding"

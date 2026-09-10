@@ -35,7 +35,8 @@
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION",
         "CAMERA",
-        "VIBRATE"
+        "VIBRATE",
+        "RECORD_AUDIO"
       ]
     },
     "web": {
@@ -53,6 +54,16 @@
         "expo-camera",
         {
           "cameraPermission": "AURA uses the camera to describe obstacles and signage ahead of you."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "AURA listens so you can control your journey by voice.",
+          "speechRecognitionPermission": "AURA turns what you say into commands like \"I need help\".",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
         }
       ],
       "./plugins/withPanicVolumeKeys"

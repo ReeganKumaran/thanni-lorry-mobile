@@ -13,10 +13,12 @@ import {
 import { AccessibleButton } from "../components/AccessibleButton";
 import { PlacePanel } from "../components/PlacePanel";
 import { PlacePickerModal } from "../components/PlacePickerModal";
+import { VoiceButton } from "../components/VoiceButton";
 import { colors, fontSize, fontWeight, radius, space, touchTarget } from "../constants/theme";
 import { checkHealth } from "../services/api";
 import { getApiOrigin, setApiOrigin } from "../services/config";
 import type { PlaceState } from "../hooks/useJourneyMonitor";
+import { useVoiceControl } from "../hooks/useVoiceControl";
 
 type Props = {
   starting: boolean;
@@ -45,6 +47,12 @@ export function HomeScreen({
   savePlace,
 }: Props) {
   const [pickingLabel, setPickingLabel] = useState<string | null>(null);
+
+  // Saying where you are going is the whole flow for someone who cannot type.
+  const voice = useVoiceControl({
+    onStart: (spokenDestination) => onStart(spokenDestination),
+    describeLocation: () => "You haven't started a journey yet.",
+  });
 
   // Your saved places are the destinations you actually travel to.
   const quickDestinations =
@@ -144,6 +152,13 @@ export function HomeScreen({
             Type where you&apos;re going, or tap one above.
           </Text>
         ) : null}
+
+        <VoiceButton
+          listening={voice.listening}
+          onPress={voice.listen}
+          lastHeard={voice.lastHeard}
+          style={styles.voice}
+        />
 
         <PlacePanel
           place={place}
@@ -304,6 +319,9 @@ const styles = StyleSheet.create({
   quickLabelSelected: {
     color: colors.text,
     fontWeight: fontWeight.medium,
+  },
+  voice: {
+    paddingTop: space.tight,
   },
   startHint: {
     color: colors.textMuted,
