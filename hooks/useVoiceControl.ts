@@ -15,6 +15,8 @@ export type VoiceHandlers = {
   onHelp?: () => void;
   onStart?: (destination: string) => void;
   onStop?: () => void;
+  /** "What's in front of me?" — asks the edge node for a description now. */
+  onLookAhead?: () => void;
   /** Should return a short spoken answer, per AURA_DESIGN.md section 31. */
   describeLocation?: () => string;
 };
@@ -75,6 +77,14 @@ export function useVoiceControl(handlers: VoiceHandlers): VoiceControl {
         case "stop":
           say("Okay. I've stopped monitoring.");
           h.onStop?.();
+          return;
+        case "lookAhead":
+          if (h.onLookAhead) {
+            say("Looking.");
+            h.onLookAhead();
+          } else {
+            say("The camera isn't watching right now.");
+          }
           return;
         case "repeat":
           speakUrgent(lastAnswerRef.current || "I haven't said anything yet.");

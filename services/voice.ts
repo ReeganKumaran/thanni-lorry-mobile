@@ -20,6 +20,7 @@ export type VoiceIntent =
   | { kind: "start"; destination: string }
   | { kind: "stop" }
   | { kind: "repeat" }
+  | { kind: "lookAhead" }
   | { kind: "unknown"; transcript: string };
 
 type Recognition = typeof import("expo-speech-recognition");
@@ -190,6 +191,15 @@ const PATTERNS: { kind: VoiceIntent["kind"]; tests: RegExp[] }[] = [
     tests: [/\b(?:stop|end|finish|cancel) (?:the )?(?:journey|trip|monitoring)\b/, /\bi(?:'ve| have)? arrived\b/],
   },
   { kind: "repeat", tests: [/\b(?:repeat|say (?:that )?again|what did you say)\b/] },
+  {
+    kind: "lookAhead",
+    tests: [
+      /\bwhat(?:'s| is)? (?:in front|ahead)\b/,
+      /\bwhat(?:'s| is)? (?:there|around)\b/,
+      /\blook ahead\b/,
+      /\bdescribe\b/,
+    ],
+  },
 ];
 
 /** "take me to college", "start journey to home", "go to the station" */

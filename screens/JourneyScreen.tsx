@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { ConnectionBadge } from "../components/ConnectionBadge";
@@ -7,6 +7,7 @@ import { isPanicGestureSupported, subscribeToPanicKeys } from "../services/panic
 import { JourneyMap } from "../components/JourneyMap";
 import { JourneyStats } from "../components/JourneyStats";
 import { PlacePanel } from "../components/PlacePanel";
+import { PerceptionPanel } from "../components/PerceptionPanel";
 import { PlacePickerModal } from "../components/PlacePickerModal";
 import { VoiceButton } from "../components/VoiceButton";
 import { TelemetryPanel } from "../components/TelemetryPanel";
@@ -19,7 +20,9 @@ import {
   space,
   touchTarget,
 } from "../constants/theme";
+import type { CameraView } from "expo-camera";
 import type { JourneyMonitor } from "../hooks/useJourneyMonitor";
+import { usePerception } from "../hooks/usePerception";
 import { useVoiceControl } from "../hooks/useVoiceControl";
 
 type Props = {
@@ -79,6 +82,15 @@ export function JourneyScreen({ monitor }: Props) {
   const headline = place.paused ? `At ${place.current}` : presentation.headline;
   const statusColor = place.paused ? colors.statusSafe : presentation.color;
 
+  const cameraRef = useRef<CameraView | null>(null);
+  const perception = usePerception({
+    cameraRef,
+    journeyId: journey?.id ?? null,
+    speedMps: lastReading?.speed_mps ?? 0,
+    safetyState,
+    enabled: journey !== null,
+  });
+
   // "Where am I?" — one sentence, per AURA_DESIGN.md section 31.
   const describeLocation = () => {
     if (place.current) return `You're at ${place.current}.`;
@@ -94,6 +106,7 @@ export function JourneyScreen({ monitor }: Props) {
     onSafe: () => respond("SAFE"),
     onHelp: () => respond("HELP"),
     onStop: () => void stop(),
+    onLookAhead: perception.scanNow,
     describeLocation,
   });
 
@@ -190,6 +203,7 @@ export function JourneyScreen({ monitor }: Props) {
           <ScrollView style={styles.details} keyboardShouldPersistTaps="handled">
             <View style={styles.detailsInner}>
               {/* Actionable first; telemetry is reference material. */}
+              <PerceptionPanel ref={cameraRef} perception={perception} />
               <PlacePanel
                 place={place}
                 canSave={lastReading !== null}
