@@ -106,17 +106,42 @@ returning `ESCALATED`). Both platforms bundle clean via `expo export`.
 
 ## Known gaps for v2
 
-- **Map.** AURA_DESIGN.md §09 wants the map to dominate the journey screen. v1
-  shows the same facts as text; the map needs a Mapbox token and a native map
-  dependency.
-- **Camera → edge node.** `services/edge` has config and requirements but no
-  server yet, so there is nothing for the phone to stream frames to. The camera
-  permission is declared and ready.
-- **Voice replies.** Check-ins are answered by touch. `expo-speech` covers output
-  only; speech-to-text needs a recogniser dependency.
-- **Journey routing.** The backend's `create_journey` ignores the `origin` the
-  app sends and always uses the hardcoded San Francisco demo route, so real GPS
-  anywhere else reads as several kilometres off route and trips a check-in
-  immediately. Real routing is backend work.
+- **Cleartext HTTP is only declared for debug builds.** `usesCleartextTraffic`
+  comes from Expo's `android/app/src/debug/AndroidManifest.xml`, which is why the
+  app talks plain HTTP to the API and the edge node today. That manifest does not
+  apply to a release build, so **the first release build will fail to reach either
+  service** — a release blocker, not a bug in the current setup. The fix is a
+  scoped `networkSecurityConfig` permitting localhost and the private LAN ranges,
+  not blanket cleartext.
+- **What the hazard camera can and cannot see.** The edge model reliably finds
+  broken and cracked pavement. It does **not** reliably identify potholes from a
+  pedestrian's viewpoint, and nothing wired in detects kerbs, steps, open
+  manholes, raised paving or missing tactile paving — the node lists those on
+  `GET /health` and never emits them. Hearing nothing at a pothole may be correct.
+  See `services/edge/HAZARD_MODEL.md` in the backend repo.
+- **Sign reading is off.** PaddleOCR has no Python 3.14 wheel, so the edge node
+  reports `status: degraded` with `unavailable_slots: ["text"]` and emits no text
+  events at all. It used to substitute a mock, which put a scripted "STAIRS" sign
+  on the live event stream as a real obstacle; silence is the correct behaviour
+  and the substitution is now blocked.
 - **Background location.** Foreground only. `UIBackgroundModes` is declared but
-  `expo-task-manager` is not wired up.
+  `expo-task-manager` is not wired up. Camera capture also stops when the app
+  leaves the foreground, deliberately — battery and privacy.
+- **The silent panic gesture is foreground-only too.** Android delivers volume
+  keys only to the focused app, so it is not a screen-off panic button.
+
+## Closed since v1
+
+These were listed as gaps and are now done — kept so the list above is read as
+current rather than aspirational.
+
+- **Map.** Leaflet over OpenStreetMap tiles in a `react-native-webview`. No
+  Mapbox token, no native map dependency, no API key of any kind.
+- **Camera to the edge node.** Wired end to end: frames go to
+  `services/edge/process-frame`, its events reach the API and the console over
+  SSE, and hazards are spoken on the phone.
+- **Voice control.** `expo-speech-recognition` for input, with the command
+  vocabulary biased into the recogniser and alternatives matched against the
+  grammar for noisy streets.
+- **Journey routing.** `create_journey` honours the origin the phone sends and
+  the route comes from OSRM, so deviation is measured against a real path.
