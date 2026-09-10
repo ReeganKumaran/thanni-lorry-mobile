@@ -174,6 +174,8 @@ function describePhase(perception: CameraPerception): string {
       const frames = `${perception.framesSent} frame${perception.framesSent === 1 ? "" : "s"}`;
       return `${describeTier(perception.cadenceMode, perception.cadenceFps)} · ${frames}`;
     }
+    case "paused":
+      return "Paused while AURA is in the background";
     case "edge-unreachable":
       return "Not watching for broken pavement";
     case "waiting-for-camera":
@@ -192,6 +194,11 @@ function describePhase(perception: CameraPerception): string {
  * hurt someone. The node's own wording draws the same line.
  */
 function describeDetail(perception: CameraPerception): string {
+  // Not a fault, and it must not read as one: the camera is off because AURA
+  // is not the app in front, and it comes back on its own.
+  if (perception.phase === "paused") {
+    return "The camera stops when you switch apps. It starts again when you come back.";
+  }
   return (
     perception.error ??
     perception.lastHazardSpoken ??

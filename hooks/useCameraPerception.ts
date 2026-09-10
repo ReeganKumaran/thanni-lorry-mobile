@@ -92,6 +92,8 @@ export type PerceptionPhase =
   | "no-permission"
   | "waiting-for-camera"
   | "running"
+  /** Deliberately stopped because AURA is not the app in front. */
+  | "paused"
   | "edge-unreachable";
 
 export type CameraPerception = {
@@ -393,7 +395,19 @@ export function useCameraPerception({
       runningRef.current = false;
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = null;
-      setPhase(journeyId ? "waiting-for-camera" : "idle");
+
+      if (!journeyId) {
+        setPhase("idle");
+      } else if (!foreground) {
+        // Stopping on background is deliberate — battery and privacy — but the
+        // last thing on screen was whatever state capture was in when it
+        // stopped, and a leftover connection error reads as a fault. Say what
+        // actually happened instead.
+        setError(null);
+        setPhase("paused");
+      } else {
+        setPhase("waiting-for-camera");
+      }
       return;
     }
 
@@ -482,7 +496,7 @@ export function useCameraPerception({
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = null;
     };
-  }, [shouldRun, journeyId, announce, captureAndSend]);
+  }, [shouldRun, journeyId, foreground, announce, captureAndSend]);
 
   // A new journey is a new scene: nothing said about the last one should
   // suppress an announcement on this one.
