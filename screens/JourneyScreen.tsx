@@ -3,7 +3,11 @@ import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from "react
 
 import { ConnectionBadge } from "../components/ConnectionBadge";
 import { HoldButton } from "../components/HoldButton";
-import { isPanicGestureSupported, subscribeToPanicKeys } from "../services/panicKeys";
+import {
+  PANIC_GESTURE_HINT,
+  isPanicGestureSupported,
+  subscribeToPanicKeys,
+} from "../services/panicKeys";
 import { JourneyMap } from "../components/JourneyMap";
 import { JourneyStats } from "../components/JourneyStats";
 import { PlacePanel } from "../components/PlacePanel";
@@ -59,7 +63,7 @@ export function JourneyScreen({ monitor }: Props) {
   // tap rather than a dialog, which would be its own thing to dismiss.
   const [confirmEnd, setConfirmEnd] = useState(false);
 
-  // Both volume keys held together raises the same SOS, silently. The
+  // Volume down five times quickly raises the same SOS, silently. The
   // on-screen hold sounds an alarm on purpose; this is the path for when being
   // heard is itself the danger.
   useEffect(() => {
@@ -181,9 +185,7 @@ export function JourneyScreen({ monitor }: Props) {
         </Pressable>
 
         {isPanicGestureSupported ? (
-          <Text style={styles.panicHint}>
-            Or hold both volume keys together — silent, no alarm.
-          </Text>
+          <Text style={styles.panicHint}>{PANIC_GESTURE_HINT}</Text>
         ) : null}
 
         {showDetails ? (

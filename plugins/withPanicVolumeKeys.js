@@ -1,10 +1,28 @@
 /**
- * Expo config plugin: volume-up + volume-down held together raises an SOS.
+ * Expo config plugin: volume-down pressed five times quickly raises a silent SOS.
  *
  * A panic gesture has to work without looking at the screen, and the on-screen
- * hold cannot be used discreetly — it sounds an alarm on purpose. Holding both
- * volume keys is silent and can be done one-handed, in a pocket, while the
- * phone is in view of someone else.
+ * hold cannot be used discreetly — it sounds an alarm on purpose. Tapping one
+ * volume key is silent, one-handed, doable in a pocket, and unremarkable to
+ * anyone watching the phone.
+ *
+ * WHY NOT BOTH VOLUME KEYS TOGETHER, which is what this used to do: Android
+ * reserves that chord for its own accessibility shortcut (hold volume-up and
+ * volume-down to toggle TalkBack). PhoneWindowManager consumes both keys the
+ * moment the second one goes down, so `onKeyDown` is never called and the app
+ * cannot see the gesture at all. Verified on a CPH2613 running Android 15: a
+ * single volume key reaches this method every time, the chord reaches it never.
+ * That collision is worst for exactly our users — someone who relies on
+ * TalkBack has the shortcut bound to that chord already.
+ *
+ * Five presses is the established emergency idiom (Android's own Emergency SOS
+ * is power five times, iOS is the side button five times), which makes it both
+ * learnable and unlikely to happen by accident.
+ *
+ * Nothing is swallowed. Volume still works normally during a journey, including
+ * while the pattern is being tapped out — a safety app that breaks the volume
+ * keys has traded one problem for another, and the moving volume gives the
+ * traveller silent confirmation that the presses are registering.
  *
  * This patches MainActivity because android/ is generated: editing the file
  * directly would be wiped by the next `expo prebuild`. Re-running the plugin is
@@ -18,23 +36,19 @@ const { withMainActivity } = require("@expo/config-plugins");
 const MARKER = "// aura:panic-volume-keys";
 
 const IMPORTS = [
-  "import android.os.Handler",
-  "import android.os.Looper",
   "import android.view.KeyEvent",
   "import com.facebook.react.ReactApplication",
   "import com.facebook.react.bridge.ReactContext",
   "import com.facebook.react.modules.core.DeviceEventManagerModule",
 ];
 
-/** Held this long before it counts — long enough not to fire on a fumble. */
-const HOLD_MS = 1500;
+/** How many presses, and how long they may take. Keep in step with services/panicKeys.ts. */
+const PANIC_PRESSES = 5;
+const PANIC_WINDOW_MS = 3000;
 
 const BODY = `
   ${MARKER}
-  private var auraVolumeUpHeld = false
-  private var auraVolumeDownHeld = false
-  private val auraPanicHandler = Handler(Looper.getMainLooper())
-  private var auraPanicRunnable: Runnable? = null
+  private val auraPanicPresses = ArrayDeque<Long>()
 
   private fun auraReactContext(): ReactContext? {
     val app = application as? ReactApplication ?: return null
@@ -56,40 +70,25 @@ const BODY = `
     }
   }
 
-  private fun auraUpdatePanicWatch() {
-    if (auraVolumeUpHeld && auraVolumeDownHeld) {
-      if (auraPanicRunnable == null) {
-        val runnable = Runnable {
-          auraPanicRunnable = null
-          auraEmitPanic()
-        }
-        auraPanicRunnable = runnable
-        auraPanicHandler.postDelayed(runnable, ${HOLD_MS}L)
-      }
-    } else {
-      auraPanicRunnable?.let { auraPanicHandler.removeCallbacks(it) }
-      auraPanicRunnable = null
+  /** Records one press and reports whether that completes the pattern. */
+  private fun auraRecordPanicPress(now: Long): Boolean {
+    while (auraPanicPresses.isNotEmpty() && now - auraPanicPresses.first() > ${PANIC_WINDOW_MS}L) {
+      auraPanicPresses.removeFirst()
     }
+    auraPanicPresses.addLast(now)
+    if (auraPanicPresses.size < ${PANIC_PRESSES}) return false
+    auraPanicPresses.clear()
+    return true
   }
 
   override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-    when (keyCode) {
-      KeyEvent.KEYCODE_VOLUME_UP -> auraVolumeUpHeld = true
-      KeyEvent.KEYCODE_VOLUME_DOWN -> auraVolumeDownHeld = true
+    // repeatCount > 0 is the auto-repeat of a key being held, not a new press,
+    // so holding volume down to mute never counts towards the pattern.
+    if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.repeatCount == 0) {
+      if (auraRecordPanicPress(event.eventTime)) auraEmitPanic()
     }
-    auraUpdatePanicWatch()
-    // Swallowed only while both are held, so ordinary volume control still works.
-    if (auraVolumeUpHeld && auraVolumeDownHeld) return true
+    // Never swallowed: volume control has to keep working during a journey.
     return super.onKeyDown(keyCode, event)
-  }
-
-  override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-    when (keyCode) {
-      KeyEvent.KEYCODE_VOLUME_UP -> auraVolumeUpHeld = false
-      KeyEvent.KEYCODE_VOLUME_DOWN -> auraVolumeDownHeld = false
-    }
-    auraUpdatePanicWatch()
-    return super.onKeyUp(keyCode, event)
   }
 `;
 
