@@ -210,7 +210,9 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     borderWidth: 1,
     justifyContent: "center",
-    minHeight: touchTarget.comfortable,
+    // The one control someone may have to hit without looking, in the dark,
+    // while frightened. CLAUDE.md reserves 96 for exactly this.
+    minHeight: touchTarget.safetyAction,
     overflow: "hidden",
     paddingHorizontal: space.section,
     paddingVertical: space.compact,

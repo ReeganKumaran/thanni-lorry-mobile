@@ -67,7 +67,7 @@ export function JourneyScreen({ monitor }: Props) {
   // on-screen hold sounds an alarm on purpose; this is the path for when being
   // heard is itself the danger.
   useEffect(() => {
-    return subscribeToPanicKeys(() => respond("HELP"));
+    return subscribeToPanicKeys(() => respond("HELP", { silent: true }));
   }, [respond]);
 
   useEffect(() => {
@@ -320,7 +320,9 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.medium,
   },
   panicHint: {
-    color: colors.textMuted,
+    // Not textMuted: this line carries the whole instruction for raising a
+    // silent SOS, and #8A8A84 on the sheet is 3.5:1 — below AA for body text.
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
     textAlign: "center",
   },
