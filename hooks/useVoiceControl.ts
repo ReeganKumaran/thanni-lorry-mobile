@@ -3,12 +3,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { tapFeedback, activatedFeedback, cancelledFeedback } from "../services/haptics";
 import { speak, speakUrgent, stopSpeaking } from "../services/speech";
 import {
+  MIN_CONFIDENCE_BENIGN,
+  MIN_CONFIDENCE_HELP,
+  isAffirmative,
+  isNegative,
+  isSafetyCritical,
   isVoiceInputSupported,
   listenOnce,
-  parseIntent,
+  parseBestIntent,
   requestVoicePermission,
 } from "../services/voice";
-import type { VoiceIntent, VoiceSession } from "../services/voice";
+import type { VoiceIntent, VoiceResult, VoiceSession } from "../services/voice";
 
 export type VoiceHandlers = {
   onSafe?: () => void;
@@ -39,6 +44,8 @@ export function useVoiceControl(handlers: VoiceHandlers): VoiceControl {
   const [lastHeard, setLastHeard] = useState<string | null>(null);
   const sessionRef = useRef<VoiceSession | null>(null);
   const lastAnswerRef = useRef<string>("");
+  // Set when AURA has asked "did you say you need help?" and is waiting.
+  const awaitingHelpConfirmationRef = useRef(false);
   const handlersRef = useRef(handlers);
 
   handlersRef.current = handlers;
@@ -52,9 +59,54 @@ export function useVoiceControl(handlers: VoiceHandlers): VoiceControl {
     speakUrgent(line);
   }, []);
 
+  /** Raise the SOS, saying so first. Split out so the confirm path can reuse it. */
+  const raiseHelp = useCallback(
+    (onHelp: () => void) => {
+      awaitingHelpConfirmationRef.current = false;
+      activatedFeedback();
+      say("I'm here. I'm notifying your trusted contact now.");
+      onHelp();
+    },
+    [say],
+  );
+
   const dispatch = useCallback(
-    (intent: VoiceIntent) => {
+    (intent: VoiceIntent, result: VoiceResult) => {
       const h = handlersRef.current;
+      const confidence = result.confidence;
+      // -1 means the recognizer did not score this one and 0 is what a partial
+      // carries. Neither says the words were wrong, so they are "unknown", not
+      // "low" — treating them as low would mute voice control entirely on a
+      // device that never reports a score.
+      const scored = confidence >= 0;
+
+      // An answer to "did you say you need help?".
+      if (awaitingHelpConfirmationRef.current) {
+        awaitingHelpConfirmationRef.current = false;
+        if (intent.kind === "help" || isAffirmative(result.transcript)) {
+          if (h.onHelp) {
+            raiseHelp(h.onHelp);
+            return;
+          }
+        }
+        if (isNegative(result.transcript)) {
+          say("Okay, I won't call anyone.");
+          return;
+        }
+        // Anything else: fall through and treat it as a fresh command.
+      }
+
+      // Benign commands are dropped when the recognizer says it is unsure —
+      // the cost is that the traveller repeats themselves, which is nothing.
+      if (
+        intent.kind !== "unknown" &&
+        !isSafetyCritical(intent.kind) &&
+        scored &&
+        confidence < MIN_CONFIDENCE_BENIGN
+      ) {
+        say("I didn't quite catch that. Say it again?");
+        return;
+      }
 
       // Each screen supplies only the handlers it can honour: the home screen
       // has no journey to escalate, the journey screen has no second one to
@@ -63,15 +115,23 @@ export function useVoiceControl(handlers: VoiceHandlers): VoiceControl {
       // "I'm notifying your trusted contact" with nothing behind it is the
       // worst thing AURA could say to someone who has just asked for help.
       switch (intent.kind) {
-        case "help":
+        case "help": {
           if (!h.onHelp) {
             say("I can't call for help until a journey is running. Say: take me to home.");
             return;
           }
-          activatedFeedback();
-          say("I'm here. I'm notifying your trusted contact now.");
-          h.onHelp();
+          // Confident enough to act on its own.
+          if (scored && confidence >= MIN_CONFIDENCE_HELP) {
+            raiseHelp(h.onHelp);
+            return;
+          }
+          // Not confident enough to escalate on, and far too important to
+          // throw away. Ask. A misheard word costs one question; an ignored
+          // plea costs everything this product exists to prevent.
+          awaitingHelpConfirmationRef.current = true;
+          say("Did you say you need help? Say yes, or hold the red button.");
           return;
+        }
         case "safe":
           if (!h.onSafe) {
             say("Nothing is being monitored right now.");
@@ -108,7 +168,7 @@ export function useVoiceControl(handlers: VoiceHandlers): VoiceControl {
           );
       }
     },
-    [say],
+    [raiseHelp, say],
   );
 
   const listen = useCallback(() => {
@@ -135,10 +195,13 @@ export function useVoiceControl(handlers: VoiceHandlers): VoiceControl {
       setListening(true);
 
       sessionRef.current = listenOnce(
-        (transcript) => {
+        (result) => {
           setListening(false);
-          setLastHeard(transcript);
-          dispatch(parseIntent(transcript));
+          const { intent, matched } = parseBestIntent(result);
+          // Show what was acted on, not just the top hypothesis — otherwise a
+          // sighted helper sees nonsense next to a command that worked.
+          setLastHeard(matched);
+          dispatch(intent, result);
         },
         (message) => {
           setListening(false);
