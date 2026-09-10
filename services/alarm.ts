@@ -7,23 +7,71 @@
  * has not stopped to check whether their phone is muted.
  */
 
-import { Audio } from "expo-av";
+import { requireOptionalNativeModule } from "expo";
 
-let sound: Audio.Sound | null = null;
+// Type-only: erased at build time, so it cannot drag the native module in.
+import type { Audio as AudioNamespace } from "expo-av";
+
+type ExpoAv = { Audio: typeof AudioNamespace };
+type LoadedSound = AudioNamespace.Sound;
+
+/** undefined = not tried yet, null = tried and unavailable. */
+let expoAv: ExpoAv | null | undefined;
+let sound: LoadedSound | null = null;
 let loading = false;
 
-async function ensureLoaded(): Promise<Audio.Sound | null> {
-  if (sound) return sound;
-  if (loading) return null;
-  loading = true;
+/**
+ * expo-av is probed for, then required — never imported outright.
+ *
+ * `import { Audio } from "expo-av"` throws at module-evaluation time on a
+ * binary without the native module ("Cannot find native module 'ExponentAV'"),
+ * taking the whole chain down with it: this file, the hold button, the journey
+ * screen, the app. Wrapping the require in try/catch is not enough either —
+ * Expo reports that failure globally, so it still surfaces as an uncaught
+ * error even when caught here.
+ *
+ * `requireOptionalNativeModule` returns null instead of throwing, which is
+ * exactly how expo-haptics stays safe. Asking first means a build without
+ * audio is a missing sound rather than a dead app, and the haptic escalation
+ * still works before the next native rebuild.
+ */
+function loadExpoAv(): ExpoAv | null {
+  if (expoAv !== undefined) return expoAv;
+
+  if (requireOptionalNativeModule("ExponentAV") == null) {
+    expoAv = null;
+    return expoAv;
+  }
 
   try {
-    await Audio.setAudioModeAsync({
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    expoAv = require("expo-av") as ExpoAv;
+  } catch {
+    expoAv = null;
+  }
+  return expoAv;
+}
+
+/** True when this build can actually make a sound. */
+export function isAlarmAvailable(): boolean {
+  return loadExpoAv() !== null;
+}
+
+async function ensureLoaded(): Promise<LoadedSound | null> {
+  if (sound) return sound;
+  if (loading) return null;
+
+  const av = loadExpoAv();
+  if (!av) return null;
+
+  loading = true;
+  try {
+    await av.Audio.setAudioModeAsync({
       playsInSilentModeIOS: true,
       staysActiveInBackground: false,
       shouldDuckAndroid: false,
     });
-    const { sound: created } = await Audio.Sound.createAsync(
+    const { sound: created } = await av.Audio.Sound.createAsync(
       require("../assets/alarm.wav"),
       { isLooping: true, volume: 1.0 },
     );
