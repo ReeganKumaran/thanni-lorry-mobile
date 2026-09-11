@@ -10,7 +10,15 @@ import {
 } from "react-native";
 import type { StyleProp, ViewStyle } from "react-native";
 
-import { colors, fontSize, fontWeight, radius, space, touchTarget } from "../constants/theme";
+import {
+  colors,
+  derived,
+  fontSize,
+  fontWeight,
+  radius,
+  space,
+  touchTarget,
+} from "../constants/theme";
 import { prepareAlarm, startAlarm, stopAlarm } from "../services/alarm";
 import {
   activatedFeedback,
@@ -31,19 +39,19 @@ type Props = {
 };
 
 /** How long the SOS must be held. Everything below is derived from it. */
-const HOLD_SECONDS = 10;
+const HOLD_SECONDS = 5;
 const HOLD_MS = HOLD_SECONDS * 1000;
 
 /**
  * The escalation is expressed as fractions of the hold, never as absolute
  * seconds.
  *
- * The ladder used to be hardcoded at 1s, 2s, 3s, 4s against a 5s hold. Raising
- * the hold to 10s under those numbers would have left everything after the
- * fourth second silent — six seconds of nothing on an emergency control, which
- * to someone who cannot see the screen is indistinguishable from a control that
- * has stopped working. Scaling the phases means the hold length can change
- * again without ever opening that gap.
+ * The ladder was once hardcoded at 1s, 2s, 3s, 4s. Against a 10s hold those
+ * numbers left everything after the fourth second silent — six seconds of
+ * nothing on an emergency control, which to someone who cannot see the screen
+ * is indistinguishable from a control that has stopped working. Expressing the
+ * phases as fractions is what lets the hold length move — 10s to 5s here —
+ * without ever reopening that gap.
  */
 const FLURRY_FROM = 0.4;
 const CONTINUOUS_FROM = 0.6;
@@ -195,6 +203,13 @@ export function HoldButton({
   });
 
   const inactive = disabled || busy;
+  /**
+   * Busy keeps its full red. Dimming it to 0.45 put the white label at roughly
+   * 2:1 on the one control a frightened traveller most needs to be certain of,
+   * in the seconds after they asked for help — so the request in flight is said
+   * in words instead, and only a genuinely disabled button is faded.
+   */
+  const muted = disabled && !busy;
   const remaining = Math.max(0, HOLD_SECONDS - elapsed);
 
   return (
@@ -213,7 +228,7 @@ export function HoldButton({
       style={[
         styles.base,
         holding && isContinuous(elapsed) && styles.alarming,
-        inactive && styles.inactive,
+        muted && styles.muted,
         style,
       ]}
     >
@@ -224,7 +239,11 @@ export function HoldButton({
           {holding ? `${holdingLabel} · ${remaining}` : label}
         </Text>
         <Text style={styles.hint}>
-          {holding ? "Release to cancel" : `Hold ${HOLD_SECONDS}s`}
+          {busy
+            ? "Calling for help…"
+            : holding
+              ? "Release to cancel"
+              : `Hold ${HOLD_SECONDS}s`}
         </Text>
       </View>
     </Pressable>
@@ -247,8 +266,8 @@ const styles = StyleSheet.create({
   },
   /** From the third second the control itself reads as an alarm. */
   alarming: {
-    backgroundColor: "#8C1A12",
-    borderColor: "#8C1A12",
+    backgroundColor: derived.statusRiskDeep,
+    borderColor: derived.statusRiskDeep,
   },
   fill: {
     ...StyleSheet.absoluteFillObject,
@@ -260,17 +279,17 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   label: {
-    color: "#FFFFFF",
+    color: colors.onActionPrimary,
     fontSize: fontSize.cardTitle,
     fontWeight: fontWeight.semibold,
     letterSpacing: 0.2,
   },
   hint: {
-    color: "#FFFFFF",
+    color: colors.onActionPrimary,
     fontSize: fontSize.meta,
     opacity: 0.85,
   },
-  inactive: {
+  muted: {
     opacity: 0.45,
   },
 });

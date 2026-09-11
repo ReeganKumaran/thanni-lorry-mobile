@@ -123,7 +123,7 @@ const styles = StyleSheet.create({
     width: 12,
   },
   heard: {
-    color: colors.textMuted,
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
     paddingTop: space.micro,
     textAlign: "center",

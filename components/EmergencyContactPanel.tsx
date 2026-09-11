@@ -22,6 +22,13 @@ import type { TrustedContactStatus } from "../services/api";
  * showing a filled or empty field, because "AURA has nobody to call" has to be
  * learnable before a journey, not after a failed escalation.
  */
+/** One sentence, used for both the screen and the screen reader. */
+function contactWarning(usingFallback: boolean): string {
+  return usingFallback
+    ? "AURA would call a number set on the server, not one you chose. Add your own so the right person is reached."
+    : "AURA has nobody to call. If you ask for help, an alert is raised but no one is phoned.";
+}
+
 export function EmergencyContactPanel() {
   const [status, setStatus] = useState<TrustedContactStatus | null>(null);
   const [name, setName] = useState("");
@@ -91,16 +98,19 @@ export function EmergencyContactPanel() {
         <Text style={styles.summary}>
           {status?.name} · {status?.phone_redacted}
         </Text>
-      ) : usingFallback ? (
-        <Text style={styles.warning}>
-          AURA would call a number set on the server, not one you chose. Add your
-          own so the right person is reached.
-        </Text>
       ) : (
-        <Text style={styles.warning}>
-          AURA has nobody to call. If you ask for help, an alert is raised but no
-          one is phoned.
-        </Text>
+        /* The marker carries the warning, not the colour: statusAttention is
+           4.48:1 on surface, under the AA floor for 16px text. Amber on the
+           shape, full contrast on the words.
+
+           The label is spelled out because `accessible` merges the children, and
+           without it a screen reader reads the decorative ▲ as "up-pointing
+           triangle" before the sentence. Same reason NavigationBanner hides its
+           arrow: the glyph is for the eye, the sentence is the message. */
+        <View accessible accessibilityLabel={contactWarning(usingFallback)} style={styles.warningRow}>
+          <Text style={styles.warningMarker}>▲</Text>
+          <Text style={styles.warning}>{contactWarning(usingFallback)}</Text>
+        </View>
       )}
 
       {editing || !hasContact ? (
@@ -110,7 +120,7 @@ export function EmergencyContactPanel() {
             value={name}
             onChangeText={setName}
             placeholder="Their name"
-            placeholderTextColor={colors.textMuted}
+            placeholderTextColor={colors.textSecondary}
             accessibilityLabel="Contact name"
             autoCapitalize="words"
           />
@@ -119,7 +129,7 @@ export function EmergencyContactPanel() {
             value={phone}
             onChangeText={setPhone}
             placeholder="+91 98765 43210"
-            placeholderTextColor={colors.textMuted}
+            placeholderTextColor={colors.textSecondary}
             keyboardType="phone-pad"
             accessibilityLabel="Contact phone number, with country code"
             accessibilityHint="Start with a plus and the country code"
@@ -191,9 +201,19 @@ const styles = StyleSheet.create({
     fontSize: fontSize.body,
     color: colors.text,
   },
-  warning: {
-    fontSize: fontSize.body,
+  warningRow: {
+    flexDirection: "row",
+    gap: space.tight,
+  },
+  warningMarker: {
     color: colors.statusAttention,
+    fontSize: fontSize.meta,
+    lineHeight: 22,
+  },
+  warning: {
+    flex: 1,
+    fontSize: fontSize.body,
+    color: colors.text,
     lineHeight: 22,
   },
   form: {

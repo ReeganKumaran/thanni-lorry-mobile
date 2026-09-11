@@ -29,8 +29,8 @@ const FILL: Record<ButtonVariant, string> = {
 const LABEL_COLOR: Record<ButtonVariant, string> = {
   primary: colors.onActionPrimary,
   secondary: colors.text,
-  safe: "#FFFFFF",
-  risk: "#FFFFFF",
+  safe: colors.onActionPrimary,
+  risk: colors.onActionPrimary,
 };
 
 export function AccessibleButton({
@@ -45,6 +45,17 @@ export function AccessibleButton({
   style,
 }: Props) {
   const inactive = disabled || busy;
+  /**
+   * Disabled and busy are not the same thing and stop looking the same here.
+   *
+   * Both used to take `opacity: 0.45`, which put the white label on "I need
+   * help" at roughly 2:1 while the request was in flight — unreadable, on the
+   * control whose state a frightened traveller most needs to be sure of. Busy
+   * now keeps its fill at full strength behind the spinner, and only a genuinely
+   * disabled button is muted: a real surface with a real border and a label at
+   * 5.06:1, rather than a ghost of itself.
+   */
+  const muted = disabled && !busy;
   const minHeight =
     size === "safety" ? touchTarget.safetyAction : touchTarget.comfortable;
 
@@ -60,11 +71,17 @@ export function AccessibleButton({
         styles.base,
         {
           minHeight,
-          backgroundColor: FILL[variant],
-          borderColor: variant === "secondary" ? colors.border : FILL[variant],
+          backgroundColor: muted ? colors.surfaceMuted : FILL[variant],
+          borderColor: muted
+            ? colors.border
+            : variant === "secondary"
+              ? colors.border
+              : FILL[variant],
         },
-        pressed && styles.pressed,
-        inactive && styles.inactive,
+        // A filled button dims; a white one has to change ground, because 15%
+        // off white is not a visible change (rule 4's 1px-border language is
+        // the same idea — state shows as a real difference, not a haze).
+        pressed && (variant === "secondary" ? styles.pressedSecondary : styles.pressed),
         style,
       ]}
     >
@@ -77,13 +94,20 @@ export function AccessibleButton({
               style={[
                 styles.label,
                 size === "safety" && styles.labelSafety,
-                { color: LABEL_COLOR[variant] },
+                { color: muted ? colors.textSecondary : LABEL_COLOR[variant] },
               ]}
             >
               {label}
             </Text>
             {hint ? (
-              <Text style={[styles.hint, { color: LABEL_COLOR[variant] }]}>{hint}</Text>
+              <Text
+                style={[
+                  styles.hint,
+                  { color: muted ? colors.textSecondary : LABEL_COLOR[variant] },
+                ]}
+              >
+                {hint}
+              </Text>
             ) : null}
           </>
         )}
@@ -108,8 +132,8 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.85,
   },
-  inactive: {
-    opacity: 0.45,
+  pressedSecondary: {
+    backgroundColor: colors.surfaceMuted,
   },
   label: {
     fontSize: fontSize.cardTitle,

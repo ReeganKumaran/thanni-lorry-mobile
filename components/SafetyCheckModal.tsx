@@ -167,9 +167,20 @@ const styles = StyleSheet.create({
     lineHeight: 30,
   },
   countdown: {
-    color: colors.statusAttention,
-    fontSize: fontSize.cardTitle,
-    fontWeight: fontWeight.medium,
+    /**
+     * Full contrast, not amber.
+     *
+     * Amber is 4.48:1 on surface. Leaning on WCAG's large-text exception to
+     * justify it needs the text to be 24px at regular weight or 18.66px at
+     * bold, and the locked type scale stops at 600 — so 22px semibold qualifies
+     * under neither reading. This is the number counting down to someone's
+     * contact being phoned, on the most important screen in the product; it
+     * gets 17.93:1 rather than an argument. The urgency is carried by the
+     * repeating buzz, the spoken warning at ten seconds, and the words.
+     */
+    color: colors.text,
+    fontSize: fontSize.section,
+    fontWeight: fontWeight.semibold,
   },
   actions: {
     gap: space.default,

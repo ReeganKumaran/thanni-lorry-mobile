@@ -12,6 +12,7 @@ import {
 
 import { AccessibleButton } from "../components/AccessibleButton";
 import { EmergencyContactPanel } from "../components/EmergencyContactPanel";
+import { TravellerNamePanel } from "../components/TravellerNamePanel";
 import { PlacePanel } from "../components/PlacePanel";
 import { PlacePickerModal } from "../components/PlacePickerModal";
 import { VoiceButton } from "../components/VoiceButton";
@@ -89,6 +90,9 @@ export function HomeScreen({
     void probe();
   };
 
+  const connection = summariseConnection(backendState, edgeState);
+  const ready = destination.trim().length > 0;
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -108,76 +112,89 @@ export function HomeScreen({
           </Text>
         </View>
 
-        <TextInput
-          accessibilityLabel="Destination"
-          accessibilityHint="Type where you are travelling to."
-          placeholder="Railway Station"
-          placeholderTextColor={colors.textMuted}
-          value={destination}
-          onChangeText={(next) => {
-            setDestination(next);
-            if (error) onDismissError();
-          }}
-          onSubmitEditing={() => onStart(destination)}
-          returnKeyType="go"
-          style={styles.input}
-        />
+        {/* One task, uninterrupted: say where you are going and start. Everything
+            that is not that now sits below its own heading, so the screen reads
+            as three decisions rather than eight stacked cards. */}
+        <View style={styles.task}>
+          <TextInput
+            accessibilityLabel="Destination"
+            accessibilityHint="Type where you are travelling to."
+            placeholder="Railway Station"
+            placeholderTextColor={colors.textSecondary}
+            value={destination}
+            onChangeText={(next) => {
+              setDestination(next);
+              if (error) onDismissError();
+            }}
+            onSubmitEditing={() => onStart(destination)}
+            returnKeyType="go"
+            style={styles.input}
+          />
 
-        <View style={styles.quickRow}>
-          {quickDestinations.map((preset) => {
-            const selected = destination.trim() === preset;
-            return (
-              <Pressable
-                key={preset}
-                accessibilityRole="button"
-                accessibilityLabel={preset}
-                accessibilityState={{ selected }}
-                onPress={() => setDestination(preset)}
-                style={[styles.quickChip, selected && styles.quickChipSelected]}
-              >
-                <Text style={[styles.quickLabel, selected && styles.quickLabelSelected]}>
-                  {preset}
-                </Text>
-              </Pressable>
-            );
-          })}
+          <View style={styles.quickRow}>
+            {quickDestinations.map((preset) => {
+              const selected = destination.trim() === preset;
+              return (
+                <Pressable
+                  key={preset}
+                  accessibilityRole="button"
+                  accessibilityLabel={preset}
+                  accessibilityState={{ selected }}
+                  onPress={() => setDestination(preset)}
+                  style={({ pressed }) => [
+                    styles.quickChip,
+                    selected && styles.quickChipSelected,
+                    pressed && styles.quickChipPressed,
+                  ]}
+                >
+                  <Text style={[styles.quickLabel, selected && styles.quickLabelSelected]}>
+                    {preset}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {error ? (
+            <View accessibilityRole="alert" style={styles.error}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : null}
+
+          <AccessibleButton
+            label="Start monitored journey"
+            onPress={() => onStart(destination)}
+            busy={starting}
+            disabled={!ready}
+            accessibilityHint="Begins sharing your location with AURA."
+          />
+
+          {!ready ? (
+            <Text style={styles.startHint}>
+              Type where you&apos;re going, or tap one above.
+            </Text>
+          ) : null}
+
+          <VoiceButton
+            listening={voice.listening}
+            onPress={voice.listen}
+            lastHeard={voice.lastHeard}
+          />
         </View>
 
-        {error ? (
-          <View accessibilityRole="alert" style={styles.error}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
-
-        <AccessibleButton
-          label="Start monitored journey"
-          onPress={() => onStart(destination)}
-          busy={starting}
-          disabled={destination.trim().length === 0}
-          accessibilityHint="Begins sharing your location with AURA."
-        />
-
-        {destination.trim().length === 0 ? (
-          <Text style={styles.startHint}>
-            Type where you&apos;re going, or tap one above.
+        <View style={styles.section}>
+          <Text accessibilityRole="header" style={styles.sectionLabel}>
+            Before you go
           </Text>
-        ) : null}
-
-        <VoiceButton
-          listening={voice.listening}
-          onPress={voice.listen}
-          lastHeard={voice.lastHeard}
-          style={styles.voice}
-        />
-
-        <EmergencyContactPanel />
-
-        <PlacePanel
-          place={place}
-          canSave
-          onSave={(label, radiusMeters) => savePlace(label, undefined, radiusMeters)}
-          onPickOnMap={(label) => setPickingLabel(label)}
-        />
+          <TravellerNamePanel />
+          <EmergencyContactPanel />
+          <PlacePanel
+            place={place}
+            canSave
+            onSave={(label, radiusMeters) => savePlace(label, undefined, radiusMeters)}
+            onPickOnMap={(label) => setPickingLabel(label)}
+          />
+        </View>
 
         <PlacePickerModal
           visible={pickingLabel !== null}
@@ -193,41 +210,48 @@ export function HomeScreen({
           }}
         />
 
-        <View style={styles.backend}>
+        {/* Last, and quiet. AURA_DESIGN.md section 39: setup plumbing is kept
+            apart from the user-facing experience, and the production UI should
+            never look like a simulator. One line states whether AURA can be
+            reached — the thing the traveller actually needs before walking out
+            — and the host addresses live behind it. */}
+        <View style={styles.section}>
+          <Text accessibilityRole="header" style={styles.sectionLabel}>
+            Connection
+          </Text>
+
           <Pressable
             accessibilityRole="button"
-            // backendLabel already begins with "Backend", so prefixing it made
-            // a screen reader say "Backend Backend connected".
-            accessibilityLabel={`${backendLabel(backendState)}. ${getApiOrigin()}`}
-            accessibilityHint="Opens the backend host setting."
+            accessibilityLabel={connection.label}
+            accessibilityHint="Opens the backend host settings."
+            accessibilityState={{ expanded: showBackend }}
             onPress={() => setShowBackend((open) => !open)}
-            style={styles.backendSummary}
+            style={({ pressed }) => [styles.connectionRow, pressed && styles.rowPressed]}
           >
-            <View
-              style={[styles.dot, { backgroundColor: backendColor(backendState) }]}
-            />
-            <Text style={styles.backendText} numberOfLines={1}>
-              {backendLabel(backendState)} · {getApiOrigin()}
+            {/* Hue on the dot, which is a graphic at a 3:1 floor. The label says
+                it in words, so nothing depends on seeing the colour. */}
+            <View style={[styles.dot, { backgroundColor: connection.color }]} />
+            <Text style={styles.connectionLabel} numberOfLines={2}>
+              {connection.label}
             </Text>
-            <Text style={styles.backendToggle}>{showBackend ? "Hide" : "Change"}</Text>
+            <Text style={styles.rowAction}>{showBackend ? "Hide" : "Change"}</Text>
           </Pressable>
-
-          {/* The camera's hazard detection runs on a separate service, so it
-              can be down while the backend is fine. Shown here rather than
-              discovered when a frame fails. */}
-          <View
-            accessible
-            accessibilityLabel={`${edgeLabel(edgeState)}. ${getEdgeOrigin()}`}
-            style={styles.backendSummary}
-          >
-            <View style={[styles.dot, { backgroundColor: backendColor(edgeState) }]} />
-            <Text style={styles.backendText} numberOfLines={1}>
-              {edgeLabel(edgeState)} · {getEdgeOrigin()}
-            </Text>
-          </View>
 
           {showBackend ? (
             <View style={styles.backendForm}>
+              <View style={styles.hostRow}>
+                <Text style={styles.hostName}>AURA</Text>
+                <Text style={styles.hostOrigin} numberOfLines={1}>
+                  {getApiOrigin()}
+                </Text>
+              </View>
+              <View style={styles.hostRow}>
+                <Text style={styles.hostName}>Hazard camera</Text>
+                <Text style={styles.hostOrigin} numberOfLines={1}>
+                  {getEdgeOrigin()}
+                </Text>
+              </View>
+
               <Text style={styles.backendHint}>
                 Over USB, leave this as localhost and run{" "}
                 <Text style={styles.backendCode}>adb reverse</Text>. Over Wi-Fi the
@@ -240,8 +264,8 @@ export function HomeScreen({
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="url"
-                placeholder="192.168.1.10:8000"
-                placeholderTextColor={colors.textMuted}
+                placeholder="192.168.1.10:8200"
+                placeholderTextColor={colors.textSecondary}
                 value={host}
                 onChangeText={setHost}
                 onSubmitEditing={applyHost}
@@ -261,41 +285,35 @@ export function HomeScreen({
   );
 }
 
-function backendLabel(state: BackendState): string {
-  switch (state) {
-    case "reachable":
-      return "Backend connected";
-    case "unreachable":
-      return "Backend unreachable";
-    case "checking":
-      return "Checking backend";
-    default:
-      return "Backend";
+/**
+ * Two services, one line.
+ *
+ * The API and the hazard node fail independently, and both used to get a row of
+ * their own with its URL — two lines of deployment detail in the middle of the
+ * traveller's screen. The node going down is still worth saying out loud, so it
+ * survives here as the worst of the two states in plain language; the addresses
+ * move behind the disclosure where whoever is wiring it up will look.
+ */
+function summariseConnection(
+  api: BackendState,
+  edge: BackendState,
+): { label: string; color: string } {
+  if (api === "checking" || edge === "checking") {
+    return { label: "Checking the connection", color: colors.textMuted };
   }
-}
-
-function edgeLabel(state: BackendState): string {
-  switch (state) {
-    case "reachable":
-      return "Hazard camera connected";
-    case "unreachable":
-      return "Hazard camera unreachable";
-    case "checking":
-      return "Checking hazard camera";
-    default:
-      return "Hazard camera";
+  if (api === "unreachable") {
+    return { label: "Can't reach AURA — it won't be watching your journey", color: colors.statusRisk };
   }
-}
-
-function backendColor(state: BackendState): string {
-  switch (state) {
-    case "reachable":
-      return colors.statusSafe;
-    case "unreachable":
-      return colors.statusRisk;
-    default:
-      return colors.textMuted;
+  if (api === "reachable" && edge === "unreachable") {
+    return {
+      label: "AURA connected · not watching for broken pavement",
+      color: colors.statusAttention,
+    };
   }
+  if (api === "reachable") {
+    return { label: "AURA connected", color: colors.statusSafe };
+  }
+  return { label: "Connection not checked yet", color: colors.textMuted };
 }
 
 const styles = StyleSheet.create({
@@ -304,14 +322,15 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: space.section,
-    gap: space.section,
+    gap: space.large,
   },
   header: {
     gap: space.tight,
     paddingTop: space.large,
   },
   wordmark: {
-    color: colors.textMuted,
+    // Not textMuted: #8A8A84 on the background is 3.24:1, under AA for 13px.
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
     fontWeight: fontWeight.semibold,
     letterSpacing: 2,
@@ -326,6 +345,27 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: fontSize.body,
     lineHeight: 22,
+  },
+  task: {
+    gap: space.default,
+  },
+  /**
+   * A 1px rule and a label, not a card. AURA_DESIGN.md section 40 asks whether
+   * there are unnecessary cards, and wrapping an already-bordered panel in
+   * another bordered box is the card-on-card depth rule 5 rules out.
+   */
+  section: {
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    gap: space.compact,
+    paddingTop: space.default,
+  },
+  sectionLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.meta,
+    fontWeight: fontWeight.semibold,
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
   },
   input: {
     backgroundColor: colors.surface,
@@ -356,6 +396,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     borderColor: colors.text,
   },
+  quickChipPressed: {
+    backgroundColor: colors.surfaceMuted,
+  },
   quickLabel: {
     color: colors.textSecondary,
     fontSize: fontSize.body,
@@ -364,11 +407,8 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: fontWeight.medium,
   },
-  voice: {
-    paddingTop: space.tight,
-  },
   startHint: {
-    color: colors.textMuted,
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
     marginTop: -space.tight,
     textAlign: "center",
@@ -385,32 +425,49 @@ const styles = StyleSheet.create({
     fontSize: fontSize.body,
     lineHeight: 22,
   },
-  backend: {
-    gap: space.compact,
-  },
-  backendSummary: {
+  connectionRow: {
     alignItems: "center",
+    borderRadius: radius.sm,
     flexDirection: "row",
     gap: space.tight,
     minHeight: touchTarget.min,
+  },
+  rowPressed: {
+    opacity: 0.6,
   },
   dot: {
     width: 8,
     height: 8,
     borderRadius: 4,
   },
-  backendText: {
-    color: colors.textMuted,
+  connectionLabel: {
+    color: colors.text,
     flex: 1,
     fontSize: fontSize.meta,
   },
-  backendToggle: {
+  rowAction: {
     color: colors.statusInfo,
     fontSize: fontSize.meta,
     fontWeight: fontWeight.medium,
   },
   backendForm: {
     gap: space.compact,
+  },
+  hostRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: space.tight,
+  },
+  hostName: {
+    color: colors.text,
+    fontSize: fontSize.meta,
+    fontWeight: fontWeight.medium,
+    width: 112,
+  },
+  hostOrigin: {
+    color: colors.textSecondary,
+    flex: 1,
+    fontSize: fontSize.meta,
   },
   backendHint: {
     color: colors.textSecondary,

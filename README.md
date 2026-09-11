@@ -75,16 +75,19 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8200
 thanni-lorry-mobile/
 ├── App.tsx                       # root: home <-> journey, safety-check takeover
 ├── screens/
-│   ├── HomeScreen.tsx            # destination, quick presets, backend host
-│   └── JourneyScreen.tsx         # status banner, telemetry, SOS, end journey
+│   ├── HomeScreen.tsx            # destination, quick presets, setup, connection
+│   └── JourneyScreen.tsx         # status, map, pinned guidance and SOS
 ├── components/
 │   ├── AccessibleButton.tsx      # 64px targets, 96px for safety actions
-│   ├── SafetyStatusBanner.tsx    # plain-language state (AURA_DESIGN.md §11)
+│   ├── SafetyStatusBanner.tsx    # plain-language state (AURA_DESIGN.md §11),
+│   │                             #   quiet / attention / critical (§37)
+│   ├── RouteProgress.tsx         # backend remaining distance + progress
 │   ├── SafetyCheckModal.tsx      # full-screen takeover (AURA_DESIGN.md §12)
 │   ├── TelemetryPanel.tsx        # off route / stopped for / arrival
 │   └── ConnectionBadge.tsx       # reporting vs. holding updates
 ├── hooks/
-│   └── useJourneyMonitor.ts      # journey lifecycle + GPS stream + state sync
+│   ├── useJourneyMonitor.ts      # journey lifecycle + GPS stream + state sync
+│   └── useReducedMotion.ts       # honours the system setting (AURA_DESIGN.md §30)
 ├── services/
 │   ├── api.ts                    # typed client
 │   ├── location.ts               # expo-location capture, normalize, replay queue

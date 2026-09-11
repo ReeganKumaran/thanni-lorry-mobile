@@ -7,13 +7,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AccessibilityInfo } from "react-native";
+import { AccessibilityInfo, Platform } from "react-native";
 
 import { DEFAULT_PLACE_SIZE, metersForSize } from "../types/api";
-import { directRoute, fetchWalkingRoute } from "../services/routing";
-import type { RoutePoint } from "../services/routing";
-import { searchPlaces } from "../services/geocoding";
 import type {
+  NavigationInstruction,
   CheckinResponse,
   Journey,
   KnownPlace,
@@ -24,6 +22,7 @@ import type {
   SafetyState,
 } from "../types/api";
 import {
+  completeJourney,
   createJourney,
   createPlace,
   fetchPendingSafetyCheck,
@@ -38,10 +37,14 @@ import {
 } from "../services/location";
 import { activatedFeedback } from "../services/haptics";
 import { presentSafetyState } from "../constants/safety";
+import { journeyIdentity } from "../services/device";
 import { speak, speakUrgent } from "../services/speech";
 
 /** How often to ask the backend what it thinks the safety state is. */
 const SAFETY_POLL_MS = 4000;
+
+/** [longitude, latitude] — the order the backend and both maps already use. */
+export type RoutePoint = [number, number];
 
 /**
  * The trail drawn on the map. Points closer together than this add nothing but
@@ -57,6 +60,10 @@ export type Telemetry = {
   deviationMeters: number;
   etaDeltaSeconds: number;
   inactivitySeconds: number;
+  /** Distance still to walk, computed by the backend against the planned route. */
+  remainingMeters: number;
+  /** Route completed, 0..1, already clamped by the backend. */
+  progress: number;
 };
 
 /** One step of where the traveller has actually been. */
@@ -102,8 +109,15 @@ export type JourneyMonitor = {
   lastReading: LocationUpdateBody | null;
   /** Actual route walked so far, for the map. */
   trail: TrailPoint[];
-  /** Planned route, when one could be worked out. */
+  /** Planned route, when the backend could work one out. */
   plannedRoute: RoutePoint[];
+  /**
+   * The next instruction, as the backend computed it. Displayed continuously;
+   * spoken only when its `key` changes.
+   */
+  navigation: NavigationInstruction | null;
+  /** False when there is no route, so deviation is not being watched. */
+  routeMonitoring: boolean;
   /** Live proof that GPS is still arriving. */
   fix: FixState;
   pendingCheck: PendingSafetyCheck | null;
@@ -145,50 +159,15 @@ function roughDistanceMeters(
 }
 
 /**
- * Labels that mean "somewhere of mine", never a place on a map.
+ * Destination resolution, route planning and the personal-label guards
+ * ("Home" is not the town of Home, Washington) all moved to the backend —
+ * `app/journey/planner.py`. The phone posts what the traveller typed and where
+ * they are standing, and reads back a polyline.
  *
- * OpenStreetMap has a town called Home in Pierce County, Washington. Geocoding
- * the bare word planned a 22,000 km route from Chennai to it, and deviation was
- * then measured against that line. A personal label with no saved place behind
- * it has no coordinates, and guessing is worse than admitting so.
+ * This is not a tidying exercise. The planned route is the line deviation is
+ * measured against, so whoever chooses it decides what "off route" means, and
+ * on this product a deviation wakes a trusted contact (AURA_TRD.md section 5.1).
  */
-const PERSONAL_LABELS = ["home", "work", "office", "college", "school", "station"];
-
-/** Nobody walks to another continent; a match this far away is the wrong match. */
-const MAX_PLAUSIBLE_DESTINATION_METERS = 100_000;
-
-/**
- * Turn what the traveller typed into coordinates.
- *
- * Their own saved places win: "Home" should mean their home, not the nearest
- * place OpenStreetMap happens to call that.
- */
-async function resolveDestination(
-  text: string,
-  saved: KnownPlace[],
-  origin: { latitude: number; longitude: number },
-): Promise<{ latitude: number; longitude: number } | null> {
-  const wanted = text.trim().toLowerCase();
-
-  const match = saved.find((p) => p.label.toLowerCase() === wanted);
-  if (match) return { latitude: match.latitude, longitude: match.longitude };
-
-  // A personal label nobody has saved yet: no route, rather than a wrong one.
-  if (PERSONAL_LABELS.includes(wanted)) return null;
-
-  try {
-    const results = await searchPlaces(text);
-    for (const candidate of results) {
-      const away = roughDistanceMeters(origin, candidate);
-      if (away <= MAX_PLAUSIBLE_DESTINATION_METERS) {
-        return { latitude: candidate.latitude, longitude: candidate.longitude };
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 export function useJourneyMonitor(): JourneyMonitor {
   const [phase, setPhase] = useState<MonitorPhase>("idle");
@@ -207,6 +186,8 @@ export function useJourneyMonitor(): JourneyMonitor {
   const [savingPlace, setSavingPlace] = useState(false);
   const [trail, setTrail] = useState<TrailPoint[]>([]);
   const [plannedRoute, setPlannedRoute] = useState<RoutePoint[]>([]);
+  const [navigation, setNavigation] = useState<NavigationInstruction | null>(null);
+  const [routeMonitoring, setRouteMonitoring] = useState(false);
   const [lastFixAt, setLastFixAt] = useState<number | null>(null);
   const [fixCount, setFixCount] = useState(0);
   const [distanceMeters, setDistanceMeters] = useState(0);
@@ -215,6 +196,15 @@ export function useJourneyMonitor(): JourneyMonitor {
   const streamerRef = useRef<LocationStreamer>(new LocationStreamer());
   const journeyIdRef = useRef<string | null>(null);
   const safetyStateRef = useRef<SafetyState>("SAFE");
+  /**
+   * The instruction key last spoken aloud.
+   *
+   * The backend buckets this key by distance and keeps it stable across fixes
+   * for the same instruction, so comparing it is what turns a 1 Hz GPS stream
+   * into a handful of announcements. Speaking on every fix would be worse than
+   * silence for a traveller who is relying on audio alone.
+   */
+  const spokenNavKeyRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -250,6 +240,38 @@ export function useJourneyMonitor(): JourneyMonitor {
     if (next !== "CHECKING") setPendingCheck(null);
   }, []);
 
+  /**
+   * Show every instruction; speak only the ones that are new.
+   *
+   * `navigation` priority sits below `safety` and `hazard` in the audio ladder
+   * (AURA_DESIGN.md section 32), so a turn is never spoken over "Are you safe?"
+   * or over a warning about the pavement.
+   */
+  const applyNavigation = useCallback((next: NavigationInstruction | null) => {
+    setNavigation(next);
+    if (!next) return;
+    if (spokenNavKeyRef.current === next.key) return;
+
+    const outcome = speak(next.text, "navigation");
+
+    // Only retire the key once the traveller has actually had the words. A turn
+    // that lost the floor to a safety check-in or a hazard callout must be
+    // offered again on the next fix — marking it spoken regardless meant
+    // "Turn left now." could be dropped silently and never repeated, which on
+    // the audio-only path is the difference between a turn and a missed one.
+    // "duplicate" counts as heard: those exact words went out moments ago.
+    if (outcome === "outranked") return;
+    spokenNavKeyRef.current = next.key;
+
+    // expo-speech is a separate pipeline from the screen reader: it can be
+    // muted on its own, and it reaches nobody on a braille display. Android
+    // gets this from the banner's live region; iOS has no live-region
+    // equivalent for a View, so the announcement is made explicitly there.
+    if (Platform.OS === "ios") {
+      AccessibilityInfo.announceForAccessibility(next.text);
+    }
+  }, []);
+
   const handleTelemetry = useCallback(
     (reading: LocationUpdateBody, result: LocationUpdateResult) => {
       if (!mountedRef.current) return;
@@ -259,7 +281,10 @@ export function useJourneyMonitor(): JourneyMonitor {
         deviationMeters: result.deviation_meters,
         etaDeltaSeconds: result.eta_delta_seconds,
         inactivitySeconds: result.inactivity_seconds,
+        remainingMeters: result.remaining_meters,
+        progress: result.progress,
       });
+      applyNavigation(result.navigation ?? null);
 
       const place = result.at_place ?? null;
       setAtPlace((previous) => {
@@ -272,7 +297,7 @@ export function useJourneyMonitor(): JourneyMonitor {
 
       applySafetyState(result.safety_state);
     },
-    [applySafetyState],
+    [applySafetyState, applyNavigation],
   );
 
   const start = useCallback(
@@ -307,22 +332,9 @@ export function useJourneyMonitor(): JourneyMonitor {
           origin = null;
         }
 
-        // A planned route is what makes "off route" mean anything. Resolve the
-        // destination first: a saved place is exact and free, otherwise fall
-        // back to searching OpenStreetMap for the text the traveller typed.
-        let route: RoutePoint[] = [];
-        if (origin) {
-          const destination = await resolveDestination(trimmed, savedPlaces, origin);
-          if (destination) {
-            // A straight line beats no route at all: deviation needs something
-            // to measure against, and the router is often unusable here.
-            const planned =
-              (await fetchWalkingRoute(origin, destination)) ??
-              directRoute(origin, destination);
-            route = planned.coordinates;
-          }
-        }
-
+        // The backend resolves the destination and plans the route. It knows the
+        // traveller's saved places, holds the maps credential, and is the only
+        // place allowed to decide what line "off route" is measured against.
         const created = await createJourney({
           destination_text: trimmed,
           ...(origin
@@ -334,8 +346,13 @@ export function useJourneyMonitor(): JourneyMonitor {
                 },
               }
             : {}),
-          ...(route.length >= 2 ? { route } : {}),
+          // Identity for the trusted contact and operations consoles, so a row
+          // reads "Sai · Pixel 8" rather than a journey id. Never safety input.
+          ...(await journeyIdentity()),
         });
+
+        // Whatever it managed to plan, read back rather than assumed.
+        const route = (created.route?.geometry?.coordinates ?? []) as RoutePoint[];
 
         if (!mountedRef.current) return;
 
@@ -347,6 +364,9 @@ export function useJourneyMonitor(): JourneyMonitor {
         setLastReading(origin);
         setPendingCheck(null);
         setPlannedRoute(route);
+        setRouteMonitoring(created.route_monitoring);
+        setNavigation(null);
+        spokenNavKeyRef.current = null;
         setQueuedReadings(0);
         setOnline(true);
         setLastFixAt(null);
@@ -402,8 +422,15 @@ export function useJourneyMonitor(): JourneyMonitor {
           return;
         }
 
+        // Say what was actually planned. "I couldn't find that place, so I'm
+        // only watching for long stops" is a materially different promise from
+        // "I'm monitoring your route", and the traveller is entitled to know
+        // which one they are getting before they set off.
         speak(
-          `Monitoring your journey to ${created.destination.name ?? trimmed}.`,
+          created.route_monitoring
+            ? `Monitoring your journey to ${created.destination.name ?? trimmed}.`
+            : created.planning_note ??
+                `I couldn't plan a route to ${trimmed}. I'll still watch for long stops.`,
           "navigation",
         );
       } catch (err) {
@@ -412,11 +439,26 @@ export function useJourneyMonitor(): JourneyMonitor {
         setError(err instanceof Error ? err.message : "Could not start the journey.");
       }
     },
-    [handleTelemetry, savedPlaces],
+    [handleTelemetry],
   );
 
   const stop = useCallback(async () => {
     await streamerRef.current.stop();
+
+    // Close the journey server-side. Without this a finished journey stays
+    // ACTIVE forever: the phone simply goes quiet, which is indistinguishable
+    // from a dead battery, so it sits on the operations board as a traveller
+    // nobody can account for.
+    //
+    // Deliberately not awaited into the teardown path and never allowed to
+    // throw — ending a journey must succeed on the phone even with no network.
+    const endingJourneyId = journeyIdRef.current;
+    if (endingJourneyId) {
+      void completeJourney(endingJourneyId).catch(() => {
+        // The backend times the journey out on its own; nothing to retry here.
+      });
+    }
+
     journeyIdRef.current = null;
     safetyStateRef.current = "SAFE";
     setPhase("idle");
@@ -430,6 +472,9 @@ export function useJourneyMonitor(): JourneyMonitor {
     setMonitoringPaused(false);
     setTrail([]);
     setPlannedRoute([]);
+    setNavigation(null);
+    setRouteMonitoring(false);
+    spokenNavKeyRef.current = null;
     setLastFixAt(null);
     setFixCount(0);
     setDistanceMeters(0);
@@ -488,6 +533,10 @@ export function useJourneyMonitor(): JourneyMonitor {
         const status = await getSafetyStatus(journeyId);
         if (cancelled || !mountedRef.current) return;
         applySafetyState(status.safety_state);
+        // The same instruction the last location response carried. Keyed, so
+        // reading it again here cannot cause a repeat announcement — but a
+        // dropped GPS response no longer costs the traveller their next turn.
+        if (status.navigation !== undefined) applyNavigation(status.navigation ?? null);
       } catch {
         // The streamer already surfaces connectivity; nothing to add here.
       }
@@ -500,7 +549,7 @@ export function useJourneyMonitor(): JourneyMonitor {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [phase, applySafetyState]);
+  }, [phase, applySafetyState, applyNavigation]);
 
   // Pull the prompt text once a check-in is outstanding.
   useEffect(() => {
@@ -604,6 +653,8 @@ export function useJourneyMonitor(): JourneyMonitor {
     lastReading,
     trail,
     plannedRoute,
+    navigation,
+    routeMonitoring,
     fix: { lastFixAt, count: fixCount, distanceMeters, startedAt },
     pendingCheck,
     place: {

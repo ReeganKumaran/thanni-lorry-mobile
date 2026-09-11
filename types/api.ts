@@ -9,12 +9,22 @@
 
 import type {
   BaseDomainEvent,
+  GeocodeResult,
   Incident,
+  Maneuver,
+  NavigationInstruction,
   RouteStatus,
   SafetyState,
 } from "@aura/types";
 
-export type { BaseDomainEvent, Incident, RouteStatus, SafetyState };
+export type {
+  BaseDomainEvent,
+  Incident,
+  Maneuver,
+  NavigationInstruction,
+  RouteStatus,
+  SafetyState,
+};
 
 export type LocationPoint = {
   latitude: number;
@@ -39,18 +49,38 @@ export type Journey = {
     geometry: { type: string; coordinates: [number, number][] };
     eta_seconds: number;
     distance_meters: number;
+    /** google | osm | synthetic | none — never present a synthetic line as surveyed. */
+    provider: string;
   };
   status: JourneyStatus;
   safety_state: SafetyState;
+  /** False when the backend could not turn the typed destination into a place. */
+  destination_resolved: boolean;
+  /** False when there is no route, so deviation is not being measured. */
+  route_monitoring: boolean;
+  /** Plain-language account of what was planned, safe to show or speak. */
+  planning_note: string | null;
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
 };
 
+/**
+ * What the phone sends to open a journey.
+ *
+ * Deliberately no `route`: the backend geocodes the destination and plans the
+ * polyline (`app/journey/planner.py`). The app used to do both, which put the
+ * decision about what "off route" means on the client and required a routing
+ * key inside the app bundle. Both are gone.
+ */
 export type CreateJourneyBody = {
   destination_text: string;
   origin?: LocationPoint;
-  user_id?: string;
+  /** Identity for the trusted contact and operations consoles. Never safety
+   *  input — the backend's verdict is identical without these. */
+  device_id?: string;
+  device_label?: string;
+  traveller_name?: string;
 };
 
 /** Exactly the payload services/api expects on POST /locations. */
@@ -74,7 +104,22 @@ export type LocationUpdateResult = {
   at_place: string | null;
   /** True while inside a saved place — no safety checks are raised. */
   monitoring_paused: boolean;
+  /** Distance still to walk along the planned route, computed by the backend. */
+  remaining_meters: number;
+  /** Route completed, already clamped to 0..1 by the backend. Never recompute it. */
+  progress: number;
+  /**
+   * What to say next. Spoken only when `key` changes — the backend buckets it
+   * so a 1 Hz GPS stream does not produce 1 Hz narration.
+   */
+  navigation: NavigationInstruction | null;
 };
+
+/**
+ * A place the traveller searched for. Re-exported from the shared contract
+ * rather than restated here, so it cannot drift from what the backend sends.
+ */
+export type { GeocodeResult };
 
 /** Somewhere the traveller has told AURA that standing still is normal. */
 export type KnownPlace = {
@@ -127,6 +172,12 @@ export type SafetyStatus = {
     explanation: string;
   } | null;
   active_incident: Incident | null;
+  /** Navigation rides along on this poll, so a missed GPS response still speaks. */
+  route_status?: RouteStatus | null;
+  deviation_meters?: number;
+  remaining_meters?: number;
+  progress?: number;
+  navigation?: NavigationInstruction | null;
 };
 
 /** Answers the backend accepts on POST /safety/checkin. */

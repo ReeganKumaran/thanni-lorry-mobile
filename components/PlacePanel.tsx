@@ -212,7 +212,7 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.medium,
   },
   rowRadius: {
-    color: colors.textMuted,
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
   },
   button: {
@@ -226,7 +226,7 @@ const styles = StyleSheet.create({
     minHeight: touchTarget.min,
   },
   waiting: {
-    color: colors.textMuted,
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
   },
 });

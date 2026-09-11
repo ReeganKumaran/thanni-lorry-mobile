@@ -76,14 +76,14 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.semibold,
   },
   meters: {
-    color: colors.textMuted,
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
   },
   metersActive: {
     color: colors.textSecondary,
   },
   hint: {
-    color: colors.textMuted,
+    color: colors.textSecondary,
     fontSize: fontSize.meta,
   },
 });

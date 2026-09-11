@@ -101,7 +101,7 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.medium,
   },
   waiting: {
-    color: colors.textMuted,
+    color: colors.textSecondary,
     fontSize: fontSize.body,
     paddingVertical: space.compact,
   },

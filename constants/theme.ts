@@ -12,9 +12,26 @@ export const colors = {
 
   text: "#171717",
   textSecondary: "#666661",
+  /**
+   * Large text and non-text marks only.
+   *
+   * #8A8A84 measures 3.47:1 on `surface`, 3.24:1 on `background` and 3.04:1 on
+   * `surfaceMuted` — over the 3:1 floor WCAG 2.2 sets for a graphic or a border,
+   * under the 4.5:1 one it sets for text below 24px (or 18.66px bold). Every
+   * label in this app is 13px or 16px, so reach for `textSecondary` (5.1-5.8:1)
+   * for anything the traveller has to read.
+   */
   textMuted: "#8A8A84",
 
   statusSafe: "#2E7D5B",
+  /**
+   * Borders, dots, markers and large text — not body copy.
+   *
+   * #A66A00 is 4.48:1 on `surface` and 3.93:1 on `surfaceMuted`, just under the
+   * 4.5:1 text floor. Where amber carries a meaning, put the hue on the shape
+   * and leave the words `colors.text`, the way `NavigationBanner` does; colour
+   * is the redundant cue there, never the one carrying the fact (rule 6).
+   */
   statusAttention: "#A66A00",
   statusRisk: "#B42318",
   statusInfo: "#2856A3",
@@ -72,4 +89,29 @@ export const touchTarget = {
 export const border = {
   width: 1,
   color: colors.border,
+} as const;
+
+/**
+ * Motion durations (AURA_DESIGN.md section 23).
+ *
+ * Two values, because the app only has two kinds of movement: confirming a
+ * touch, and a component moving between states. Anything longer would be
+ * narrative, and section 24 is explicit that a safety transition is immediate —
+ * the status surface changes, the screen never flashes.
+ */
+export const motion = {
+  micro: 150,
+  component: 220,
+} as const;
+
+/**
+ * The one derived colour in the file.
+ *
+ * `statusRisk` darkened, used for the last phase of the SOS hold where the
+ * control itself becomes the alarm. It lives here rather than inline in
+ * `HoldButton` so the palette stays reviewable in one place; it is not a new
+ * status colour and nothing else may use it.
+ */
+export const derived = {
+  statusRiskDeep: "#8C1A12",
 } as const;

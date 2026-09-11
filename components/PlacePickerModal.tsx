@@ -24,13 +24,12 @@ import {
   space,
   touchTarget,
 } from "../constants/theme";
-import { describeCoordinates, searchPlaces } from "../services/geocoding";
-import type { GeoResult } from "../services/geocoding";
+import { describePoint, searchPlaces } from "../services/api";
 import { tapFeedback } from "../services/haptics";
 import { getCurrentPosition, requestLocationPermission } from "../services/location";
 import { speak } from "../services/speech";
 import { DEFAULT_PLACE_SIZE, metersForSize } from "../types/api";
-import type { PlaceSizeKey } from "../types/api";
+import type { GeocodeResult, PlaceSizeKey } from "../types/api";
 
 type Props = {
   visible: boolean;
@@ -45,7 +44,12 @@ type Props = {
 };
 
 /**
- * Pick a place on OpenStreetMap.
+ * Pick a place on the map.
+ *
+ * The tiles are OpenStreetMap — keyless, so rendering cannot fail for want of a
+ * credential. Searching and describing a pin go through the backend, which is
+ * where the geocoding credential lives and which may be backed by a different
+ * provider entirely, so nothing here names one.
  *
  * The map is the instrument here, so it gets the screen: everything else is a
  * thin bar above or below it. Dropping a pin accurately needs room to pan and
@@ -64,7 +68,7 @@ export function PlacePickerModal({
   onConfirm,
 }: Props) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<GeoResult[]>([]);
+  const [results, setResults] = useState<GeocodeResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [latitude, setLatitude] = useState(initialLatitude);
@@ -88,8 +92,19 @@ export function PlacePickerModal({
     if (!visible) return;
     let cancelled = false;
     void (async () => {
-      const described = await describeCoordinates(latitude, longitude);
-      if (!cancelled) setAddress(described);
+      const described = await describePoint(latitude, longitude);
+      if (!cancelled) {
+        // An approximate point says so. Saving a guess as "Home" without
+        // telling the traveller it was a guess is the same failure the planned
+        // route avoids by reporting its provider.
+        setAddress(
+          described
+            ? described.approximate
+              ? `${described.address} (approximate)`
+              : described.address
+            : null,
+        );
+      }
     })();
     return () => {
       cancelled = true;
@@ -104,9 +119,9 @@ export function PlacePickerModal({
     setSearching(true);
     setError(null);
     try {
-      const found = await searchPlaces(query);
+      const found = await searchPlaces(query, { latitude, longitude });
       setResults(found);
-      if (found.length === 0) setError("Nothing on OpenStreetMap matched that.");
+      if (found.length === 0) setError("Nothing matched that. Try a different name.");
       else speak(`${found.length} places found.`, "requested");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed.");
@@ -142,10 +157,10 @@ export function PlacePickerModal({
     }
   };
 
-  const choose = (result: GeoResult) => {
+  const choose = (result: GeocodeResult) => {
     setLatitude(result.latitude);
     setLongitude(result.longitude);
-    setAddress(result.label);
+    setAddress(result.approximate ? `${result.address} (approximate)` : result.address);
     setResults([]);
     setQuery("");
     speak(result.name, "requested");
@@ -174,9 +189,9 @@ export function PlacePickerModal({
 
         <View style={styles.searchRow}>
           <TextInput
-            accessibilityLabel={`Search OpenStreetMap for your ${label} address`}
+            accessibilityLabel={`Search for your ${label} address`}
             placeholder="Search an address"
-            placeholderTextColor={colors.textMuted}
+            placeholderTextColor={colors.textSecondary}
             value={query}
             onChangeText={setQuery}
             onSubmitEditing={() => void runSearch()}
@@ -233,13 +248,17 @@ export function PlacePickerModal({
                 <Pressable
                   key={`${result.latitude},${result.longitude}`}
                   accessibilityRole="button"
-                  accessibilityLabel={result.label}
+                  accessibilityLabel={
+                    result.approximate
+                      ? `${result.address}, approximate location`
+                      : result.address
+                  }
                   onPress={() => choose(result)}
                   style={styles.result}
                 >
                   <Text style={styles.resultName}>{result.name}</Text>
                   <Text style={styles.resultAddress} numberOfLines={2}>
-                    {result.label}
+                    {result.approximate ? `${result.address} (approximate)` : result.address}
                   </Text>
                 </Pressable>
               ))}
@@ -261,7 +280,7 @@ export function PlacePickerModal({
               </Text>
             ) : (
               <View style={styles.selectionLoading}>
-                <ActivityIndicator size="small" color={colors.textMuted} />
+                <ActivityIndicator size="small" color={colors.textSecondary} />
                 <Text style={styles.selectionAddress}>Looking up the address…</Text>
               </View>
             )}
@@ -349,14 +368,11 @@ const styles = StyleSheet.create({
     height: touchTarget.min,
     borderRadius: radius.md,
     backgroundColor: colors.surface,
+    // A 1px border on a solid surface, not a shadow (rule 4) — the same way
+    // JourneyMap's recentre control sits over the tiles. Two map controls that
+    // do the same job now look like each other.
     borderColor: colors.border,
     borderWidth: 1,
-    // Lifted off the map so it reads as a control, not part of the tiles.
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    elevation: 3,
   },
   results: {
     ...StyleSheet.absoluteFillObject,

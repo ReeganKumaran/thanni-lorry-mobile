@@ -12,6 +12,7 @@ import type {
   KnownPlace,
   CheckinResult,
   CreateJourneyBody,
+  GeocodeResult,
   Journey,
   LocationUpdateBody,
   LocationUpdateResult,
@@ -101,6 +102,10 @@ export function createJourney(body: CreateJourneyBody): Promise<Journey> {
   });
 }
 
+export function completeJourney(journeyId: string): Promise<Journey> {
+  return request<Journey>(`/journeys/${journeyId}/complete`, { method: "POST" });
+}
+
 export function getActiveJourney(): Promise<Journey | null> {
   return request<Journey | null>("/journeys/active");
 }
@@ -162,6 +167,47 @@ export function createPlace(
       radius_meters: radiusMeters,
     }),
   });
+}
+
+/**
+ * Search for a place by name or address.
+ *
+ * The geocoding call itself happens on the backend, which is where the maps
+ * credential lives. The app used to call a geocoding service directly, which
+ * meant shipping a key in the bundle.
+ *
+ * Call on submit, not per keystroke: the backend honours the upstream services'
+ * rate limits on this path, and a search per keystroke would exhaust them.
+ */
+export function searchPlaces(
+  query: string,
+  near?: { latitude: number; longitude: number },
+): Promise<GeocodeResult[]> {
+  const params = new URLSearchParams({ q: query });
+  if (near) {
+    params.set("latitude", String(near.latitude));
+    params.set("longitude", String(near.longitude));
+  }
+  return request<GeocodeResult[]>(`/places/search?${params.toString()}`);
+}
+
+/**
+ * Describe a dropped pin as an address, so it can be read aloud.
+ *
+ * Returns null when nothing can name the point — a pin without an address is
+ * still a usable pin, and the picker must not fail over a missing label.
+ */
+export async function describePoint(
+  latitude: number,
+  longitude: number,
+): Promise<GeocodeResult | null> {
+  try {
+    return await request<GeocodeResult | null>(
+      `/places/describe?latitude=${latitude}&longitude=${longitude}`,
+    );
+  } catch {
+    return null;
+  }
 }
 
 export function deletePlace(placeId: string): Promise<unknown> {

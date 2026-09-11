@@ -17,6 +17,9 @@ export function ConnectionBadge({ online, queuedReadings }: Props) {
     : queuedReadings > 0
       ? `Offline · ${queuedReadings} update${queuedReadings === 1 ? "" : "s"} held`
       : "Offline";
+  // Hue on the dot only. On surfaceMuted statusAttention is 3.93:1 and even
+  // statusSafe is 4.38:1 — both under the AA floor for a 13px label — and the
+  // label already says "Offline" in words, so it keeps full contrast.
   const color = online ? colors.statusSafe : colors.statusAttention;
 
   return (
@@ -27,7 +30,7 @@ export function ConnectionBadge({ online, queuedReadings }: Props) {
       style={styles.container}
     >
       <View style={[styles.dot, { backgroundColor: color }]} />
-      <Text style={[styles.label, { color }]}>{label}</Text>
+      <Text style={styles.label}>{label}</Text>
     </View>
   );
 }
@@ -49,6 +52,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   label: {
+    color: colors.text,
     fontSize: fontSize.meta,
     fontWeight: fontWeight.medium,
   },
