@@ -12,7 +12,7 @@
  * API (PRD section 13). Nothing here uploads a frame to `services/api`.
  */
 
-import { getEdgeOrigin } from "./config";
+import { getApiBaseUrl } from "./config";
 
 /**
  * Longer than the API client's 8s: a frame carries a JPEG body and the node may
@@ -190,7 +190,7 @@ export async function processFrame(frame: FrameUpload): Promise<ProcessFrameResu
   const timer = setTimeout(() => controller.abort(), FRAME_TIMEOUT_MS);
 
   try {
-    const res = await fetch(`${getEdgeOrigin()}/process-frame`, {
+    const res = await fetch(`${getApiBaseUrl()}/perception/frame`, {
       method: "POST",
       body,
       signal: controller.signal,
@@ -207,7 +207,7 @@ export async function processFrame(frame: FrameUpload): Promise<ProcessFrameResu
     if (error instanceof Error && error.name === "AbortError") {
       throw new EdgeError("The edge node did not respond in time.", 0);
     }
-    throw new EdgeError(`Can't reach the edge node at ${getEdgeOrigin()}.`, 0);
+    throw new EdgeError(`Can't reach AURA at ${getApiBaseUrl()}.`, 0);
   } finally {
     clearTimeout(timer);
   }
@@ -228,7 +228,7 @@ export async function checkEdgeHealth(): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 4000);
   try {
-    const res = await fetch(`${getEdgeOrigin()}/health`, {
+    const res = await fetch(`${getApiBaseUrl()}/perception/health`, {
       signal: controller.signal,
       headers: { Accept: "application/json" },
     });

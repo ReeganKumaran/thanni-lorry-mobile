@@ -481,7 +481,13 @@ export function useCameraPerception({
         setError(
           err instanceof EdgeError
             ? err.message
-            : "Could not send a camera frame to the edge node.",
+            // Everything sendFrame throws is an EdgeError, so anything else
+            // failed BEFORE the network — almost always the camera itself.
+            // Saying "could not send" here sent debugging at the backend for an
+            // hour while the real fault was capture.
+            : `Camera capture failed: ${
+                err instanceof Error && err.message ? err.message : "unknown error"
+              }`,
         );
       }
 
