@@ -26,7 +26,7 @@ AURA_DESIGN.md §32, so the traveller is not narrated at.
 
 ```bash
 # 1. Backend — from a clone of NINJA981/Thanni-Lorry
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000   # in services/api
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8200   # in services/api
 
 # 2. App — from this repo
 npm install
@@ -56,9 +56,9 @@ and re-syncing is a single file copy from the backend repo.
 1. the host typed into **Change** on the home screen (session-scoped)
 2. `EXPO_PUBLIC_AURA_API_URL` (see `.env.example`)
 3. the Expo dev-server host — in Expo Go this is already the laptop's LAN IP, so
-   the app just swaps in port 8000. This is the path that usually works with no
+   the app just swaps in port 8200. This is the path that usually works with no
    configuration at all.
-4. `http://localhost:8000`, which only helps in the simulator or on web
+4. `http://localhost:8200`, which only helps in the simulator or on web
 
 The home screen shows the resolved origin and whether `/health` answered, so a
 wrong host is visible before a journey starts rather than after.
@@ -66,7 +66,7 @@ wrong host is visible before a journey starts rather than after.
 Uvicorn binds to loopback by default. For a real phone, serve on the LAN:
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8200
 ```
 
 ## Layout

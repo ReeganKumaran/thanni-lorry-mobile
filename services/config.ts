@@ -8,12 +8,12 @@
  *   2. EXPO_PUBLIC_AURA_API_URL / extra.auraApiUrl from the Expo config
  *   3. the Expo dev-server host — in Expo Go this is already the laptop's LAN
  *      IP, so we reuse it and swap in the API port
- *   4. http://localhost:8000, which only works in the web/simulator case
+ *   4. http://localhost:8200, which only works in the web/simulator case
  */
 
 import Constants from "expo-constants";
 
-export const API_PORT = 8000;
+export const API_PORT = 8200;
 export const API_PREFIX = "/api/v1";
 
 /**
