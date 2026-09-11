@@ -211,3 +211,55 @@ export async function fetchPendingSafetyCheck(
 
   return null;
 }
+
+/** Who AURA calls when it escalates. Reads never carry the full number. */
+export type TrustedContact = {
+  user_id: string;
+  name: string;
+  phone_redacted: string;
+  relationship: string;
+  updated_at: string;
+  set_by_traveller: boolean;
+};
+
+/** Whether an escalation would reach anybody, without revealing who. */
+export type TrustedContactStatus = {
+  configured: boolean;
+  source: "traveller" | "environment" | "none";
+  name?: string | null;
+  phone_redacted?: string | null;
+};
+
+export function getTrustedContact(): Promise<TrustedContact | null> {
+  return request<TrustedContact | null>("/contacts/trusted");
+}
+
+/**
+ * Set the person AURA calls. Saving again replaces the previous one — there is
+ * deliberately only ever one, because "which of your three contacts did we
+ * call?" is not a question anyone wants to answer afterwards.
+ *
+ * The number is sent as typed; the server validates E.164 and stores it. It is
+ * never read back in full.
+ */
+export function saveTrustedContact(
+  name: string,
+  phone: string,
+): Promise<TrustedContact> {
+  return request<TrustedContact>("/contacts/trusted", {
+    method: "PUT",
+    body: JSON.stringify({ name, phone }),
+  });
+}
+
+export function deleteTrustedContact(): Promise<unknown> {
+  return request<unknown>("/contacts/trusted", { method: "DELETE" });
+}
+
+/**
+ * Asked before a journey starts. "AURA has nobody to call" is something a
+ * traveller has to learn *before* they need it, not from a failed escalation.
+ */
+export function getTrustedContactStatus(): Promise<TrustedContactStatus> {
+  return request<TrustedContactStatus>("/contacts/trusted/status");
+}

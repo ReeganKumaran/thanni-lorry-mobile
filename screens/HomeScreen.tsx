@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AccessibleButton } from "../components/AccessibleButton";
+import { EmergencyContactPanel } from "../components/EmergencyContactPanel";
 import { PlacePanel } from "../components/PlacePanel";
 import { PlacePickerModal } from "../components/PlacePickerModal";
 import { VoiceButton } from "../components/VoiceButton";
@@ -168,6 +169,8 @@ export function HomeScreen({
           lastHeard={voice.lastHeard}
           style={styles.voice}
         />
+
+        <EmergencyContactPanel />
 
         <PlacePanel
           place={place}
