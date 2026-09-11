@@ -8,6 +8,7 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
+      "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#F7F7F5"
     },
@@ -27,6 +28,7 @@
     "android": {
       "package": "com.aura.companion",
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#F7F7F5"
       },
       "permissions": [
@@ -67,6 +69,7 @@
         }
       ],
       "./plugins/withPanicVolumeKeys"
-    ]
+    ],
+    "icon": "./assets/icon.png"
   }
 }
