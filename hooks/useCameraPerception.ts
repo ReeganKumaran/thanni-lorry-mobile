@@ -305,18 +305,25 @@ export function useCameraPerception({
     })();
   }, []);
 
+  /**
+   * Returns whether it actually spoke. A caller answering a direct question
+   * needs to know: this stays quiet for three separate reasons — nothing the
+   * node wrote a sentence for, a safety conversation in progress, the
+   * anti-repeat window — and "said nothing" must not be mistaken for
+   * "answered".
+   */
   const announce = useCallback((
     hazards: EdgeHazard[],
     objects: EdgeDetection[],
     safetyState: string,
     requested = false,
-  ) => {
+  ): boolean => {
     // Worst first across BOTH detectors. The node ranks within each list; the
     // merge here is the one piece the phone has to do, because only it sees
     // both. Taking the head means AURA says one thing rather than reading out a
     // list — the failure mode AURA_DESIGN section 10 calls out.
     const worst = announceables(hazards, objects)[0];
-    if (!worst) return;
+    if (!worst) return false;
 
     lastHazardAtRef.current = Date.now();
 
@@ -327,7 +334,7 @@ export function useCameraPerception({
     // section 32 is explicit that narration must not intrude on a safety
     // event. Frames keep flowing, so the console and the backend still get the
     // evidence; only the talking stops.
-    if (safetyState !== "SAFE") return;
+    if (safetyState !== "SAFE") return false;
 
     // The node's own wording, spoken verbatim. Its absence upstream is the
     // instruction to stay quiet: silence beats inventing a sentence for a
@@ -340,7 +347,7 @@ export function useCameraPerception({
     // out over and over. It must not apply when the traveller has just asked —
     // an unanswered question is the failure this whole affordance exists to fix.
     if (!requested && spokenAt !== undefined && now - spokenAt < HAZARD_REANNOUNCE_MS) {
-      return;
+      return false;
     }
 
     announcedRef.current.set(key, now);
@@ -352,6 +359,7 @@ export function useCameraPerception({
     // reading a braille display. Announce through both.
     AccessibilityInfo.announceForAccessibility(sentence);
     setLastHazardSpoken(sentence);
+    return true;
   }, []);
 
   /**
@@ -424,8 +432,15 @@ export function useCameraPerception({
         }
 
         const outcome = outcomeOf(result);
-        if (outcome === "hazard") {
-          announce(result.hazards ?? [], result.objects ?? [], safetyStateRef.current, true);
+        // Ask, rather than assume. `announce` stays silent when the node found
+        // something but wrote no sentence for it — a blocking object it chose
+        // not to interrupt anyone over — and returning here on that would leave
+        // a direct question unanswered, which is the exact failure this
+        // affordance exists to fix. Fall through to the node's own summary.
+        if (
+          outcome === "hazard" &&
+          announce(result.hazards ?? [], result.objects ?? [], safetyStateRef.current, true)
+        ) {
           return;
         }
 
@@ -433,6 +448,10 @@ export function useCameraPerception({
         // "nothing I can recognise is in your way", never "the path is clear",
         // because it cannot see kerbs, steps or open manholes.
         const reply = spokenFor(result, outcome);
+        // Never speak an empty line, and never blank the on-screen detail with
+        // one: `describeDetail` reads `lastHazardSpoken` with `??`, so ""
+        // would win over the fallback copy and leave the row saying nothing.
+        if (!reply) return;
         speak(reply, "requested");
         AccessibilityInfo.announceForAccessibility(reply);
         setLastHazardSpoken(reply);
@@ -515,7 +534,11 @@ export function useCameraPerception({
             ) {
               hazardAnnouncedRef.current = false;
               clearRunRef.current = 0;
-              const line = "The pavement ahead looks clear again.";
+              // Not "the pavement" any more: what was announced may have been a
+              // bus or a bench, and following that with a remark about paving
+              // answers a question nobody asked. The node's own phrasing for
+              // the negative, which stays honest about what it cannot see.
+              const line = "Nothing I can recognise is in your way now.";
               speak(line, "navigation");
               AccessibilityInfo.announceForAccessibility(line);
               setLastHazardSpoken(line);

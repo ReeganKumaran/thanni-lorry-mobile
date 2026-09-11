@@ -116,6 +116,18 @@ export type FrameOutcome = "hazard" | "clear" | "unchanged" | "not-sampled";
 
 export function outcomeOf(result: ProcessFrameResult): FrameOutcome {
   if (result.hazards && result.hazards.length > 0) return "hazard";
+  // A blocking object counts too. `is_hazard` is the node's own verdict, so
+  // reading it is not a judgement made on the phone (AURA_TRD.md section 5.1) —
+  // but ignoring it was. Only the surface detector was consulted here, so a
+  // frame carrying a bus and no cracked pavement came back "clear", which said
+  // "nothing I can recognise is in your way" out loud to a traveller with a bus
+  // in front of them, and let the "clear again" line fire while it was still
+  // there. A detection with no `recommendation` is still not silence-worthy at
+  // this level: it means the node had no sentence for it, not that the path is
+  // clear, and only `announce` reads that far.
+  if (result.objects && result.objects.some((object) => object.is_hazard)) {
+    return "hazard";
+  }
   if (result.throttled || !result.accepted) return "not-sampled";
   if (result.duplicate) return "unchanged";
   return "clear";
@@ -136,8 +148,12 @@ export function spokenFor(result: ProcessFrameResult, outcome: FrameOutcome): st
       return "Nothing has changed since I last looked.";
     case "not-sampled":
       return "I couldn't look just then. Try again in a moment.";
-    default:
-      return "";
+    case "hazard":
+      // Only reached when the node found something and sent neither a summary
+      // nor a sentence for the detection itself. It says no more than
+      // `is_hazard` already said, and it exists because silence in reply to
+      // "what's in front of me?" is indistinguishable from a broken app.
+      return "Something is in your way. I can't tell you what it is.";
   }
 }
 
