@@ -20,7 +20,11 @@ import type { AppStateStatus } from "react-native";
 import type { CameraView } from "expo-camera";
 
 import { EdgeError, outcomeOf, processFrame, spokenFor } from "../services/perception";
-import type { EdgeHazard, ProcessFrameResult } from "../services/perception";
+import type {
+  EdgeDetection,
+  EdgeHazard,
+  ProcessFrameResult,
+} from "../services/perception";
 import { speak } from "../services/speech";
 import { tapFeedback } from "../services/haptics";
 
@@ -164,6 +168,64 @@ function hazardKey(hazard: EdgeHazard): string {
   return `${hazard.hazard_type}|${hazard.distance_estimate}|${hazard.lateral}`;
 }
 
+/**
+ * One thing worth saying, from either detector.
+ *
+ * Surface hazards and blocking objects are different models with different
+ * taxonomies, but to the traveller they are the same event: something is in the
+ * way. They are merged and ranked together so AURA says the single most urgent
+ * thing, rather than reading two lists.
+ */
+type Announceable = {
+  key: string;
+  sentence: string;
+  severity: "low" | "medium" | "high";
+  distance: "immediate" | "near" | "far";
+};
+
+const SEVERITY_RANK = { high: 2, medium: 1, low: 0 } as const;
+const DISTANCE_RANK = { immediate: 2, near: 1, far: 0 } as const;
+
+/**
+ * Blocking objects carry a sentence only when the node decided they are worth
+ * announcing; everything else is silently dropped. A moving vehicle bearing
+ * down matters more than cracked pavement, so a vehicle at `immediate` is
+ * ranked high — the same band the surface detector uses for a pothole underfoot.
+ */
+function announceables(
+  hazards: EdgeHazard[],
+  objects: EdgeDetection[],
+): Announceable[] {
+  const fromHazards: Announceable[] = hazards
+    .filter((h) => h.recommendation?.trim())
+    .map((h) => ({
+      key: hazardKey(h),
+      sentence: h.recommendation!.trim(),
+      severity: h.severity,
+      distance: h.distance_estimate,
+    }));
+
+  const fromObjects: Announceable[] = objects
+    .filter((o) => o.is_hazard && o.recommendation?.trim())
+    .map((o) => ({
+      key: `${o.label}|${o.distance_estimate}|${o.lateral ?? "ahead"}`,
+      sentence: o.recommendation!.trim(),
+      severity:
+        o.distance_estimate === "immediate"
+          ? "high"
+          : o.distance_estimate === "near"
+            ? "medium"
+            : "low",
+      distance: o.distance_estimate,
+    }));
+
+  return [...fromHazards, ...fromObjects].sort(
+    (a, b) =>
+      SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] ||
+      DISTANCE_RANK[b.distance] - DISTANCE_RANK[a.distance],
+  );
+}
+
 /** Pick the closest available capture size at or above the node's working width. */
 function chooseSmallestSize(sizes: string[]): string | undefined {
   const parsed = sizes
@@ -245,14 +307,15 @@ export function useCameraPerception({
 
   const announce = useCallback((
     hazards: EdgeHazard[],
+    objects: EdgeDetection[],
     safetyState: string,
     requested = false,
   ) => {
-    // Worst first, decided by the node (services/edge/pipeline.py sorts on
-    // severity, then proximity, then confidence). Taking the head means the
-    // phone never ranks hazards itself, and says one thing rather than reading
-    // out a list.
-    const worst = hazards[0];
+    // Worst first across BOTH detectors. The node ranks within each list; the
+    // merge here is the one piece the phone has to do, because only it sees
+    // both. Taking the head means AURA says one thing rather than reading out a
+    // list — the failure mode AURA_DESIGN section 10 calls out.
+    const worst = announceables(hazards, objects)[0];
     if (!worst) return;
 
     lastHazardAtRef.current = Date.now();
@@ -266,12 +329,11 @@ export function useCameraPerception({
     // evidence; only the talking stops.
     if (safetyState !== "SAFE") return;
 
-    const sentence = worst.recommendation?.trim();
-    // No sentence from the node means nothing safe to say. Silence beats
-    // inventing wording for a detection we did not classify.
-    if (!sentence) return;
-
-    const key = hazardKey(worst);
+    // The node's own wording, spoken verbatim. Its absence upstream is the
+    // instruction to stay quiet: silence beats inventing a sentence for a
+    // detection we did not classify.
+    const sentence = worst.sentence;
+    const key = worst.key;
     const now = Date.now();
     const spokenAt = announcedRef.current.get(key);
     // The anti-repeat window exists so a hazard that stays in frame is not read
@@ -363,7 +425,7 @@ export function useCameraPerception({
 
         const outcome = outcomeOf(result);
         if (outcome === "hazard") {
-          announce(result.hazards ?? [], safetyStateRef.current, true);
+          announce(result.hazards ?? [], result.objects ?? [], safetyStateRef.current, true);
           return;
         }
 
@@ -440,7 +502,7 @@ export function useCameraPerception({
           }
 
           const outcome = outcomeOf(result);
-          announce(result.hazards ?? [], safetyStateRef.current);
+          announce(result.hazards ?? [], result.objects ?? [], safetyStateRef.current);
 
           // Say it once when a hazard that WAS announced has gone. That is a
           // change worth knowing about; a clear frame on its own is not.

@@ -48,12 +48,21 @@ export type EdgeHazard = {
   recommendation?: string | null;
 };
 
+/**
+ * Matches `DetectionOut`. Like `EdgeHazard`, `recommendation` is the node's own
+ * sentence and is spoken verbatim — it is present only when the node classed
+ * the detection as blocking, so its absence is the instruction to stay quiet.
+ * A bus is worth interrupting someone for; a parked bench they are walking past
+ * is not, and that judgement stays on the server.
+ */
 export type EdgeDetection = {
   label: string;
   confidence: number;
   bbox: number[];
   is_hazard: boolean;
   distance_estimate: "immediate" | "near" | "far";
+  lateral?: "left" | "ahead" | "right";
+  recommendation?: string | null;
 };
 
 export type EdgeForwardResult = {
